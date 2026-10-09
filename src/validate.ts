@@ -17,7 +17,7 @@ function highestApy(interest: Interest): number {
 }
 
 function minBalanceWaiver(p: Product): number | null {
-  const c = p.monthlyFee.waiver?.conditions.find((x) => x.kind === "min_balance");
+  const c = p.monthlyFee.waiver.conditions.find((x) => x.kind === "min_balance");
   return c && c.kind === "min_balance" ? c.amount : null;
 }
 
@@ -34,9 +34,10 @@ export function validateBank(config: BankConfig): string[] {
     if (p.id !== id) err(`${id}: id field is ${p.id}`);
     if (p.minOpeningDeposit < 0) err(`${id}: negative opening deposit`);
     if (p.monthlyFee.amount < 0) err(`${id}: negative monthly fee`);
-    if (p.monthlyFee.amount === 0 && p.monthlyFee.waiver) err(`${id}: waiver on a zero fee`);
-    if (p.monthlyFee.waiver && p.monthlyFee.waiver.conditions.length === 0) err(`${id}: waiver with no conditions`);
-    if (p.family === "checking" && p.bonus) err(`${id}: checking accounts have no interest bonus in this schema`);
+    const waiver = p.monthlyFee.waiver;
+    if (p.monthlyFee.amount === 0 && waiver.conditions.length > 0) err(`${id}: waiver on a zero fee`);
+    if (waiver.conditions.length === 0 && waiver.logic !== "any") err(`${id}: empty "all" waiver would waive every fee`);
+    if (p.family === "checking" && p.bonuses.length > 0) err(`${id}: checking accounts have no interest bonus in this schema`);
     if (p.interest.structure === "tiered") {
       const tiers = p.interest.tiers;
       if (tiers[0]?.minBalance !== 0) err(`${id}: first tier must start at 0`);

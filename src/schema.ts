@@ -20,8 +20,9 @@ export type WaiverCondition =
 
 export interface MonthlyFee {
   amount: number;
-  // null: the fee can never be waived.
-  waiver: { logic: "any" | "all"; conditions: WaiverCondition[] } | null;
+  // Empty conditions: the fee can never be waived. An empty list always uses
+  // "any" (any of nothing is false); "all" of nothing would waive every fee.
+  waiver: { logic: "any" | "all"; conditions: WaiverCondition[] };
 }
 
 export type Interest =
@@ -48,7 +49,8 @@ export interface Product {
   minOpeningDeposit: number;
   monthlyFee: MonthlyFee;
   interest: Interest;
-  bonus: InterestBonus | null;
+  // Empty: no bonus is offered.
+  bonuses: InterestBonus[];
 }
 
 // Where a rule is enforced: "api" blocks the call with a vague error,

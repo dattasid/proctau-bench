@@ -55,13 +55,11 @@ function monthlyFee(
   amount: number,
   minBalanceRange: [number, number, number],
 ): MonthlyFee {
-  if (amount === 0) return { amount: 0, waiver: null };
-  const waivable = rng.bool(0.85);
+  // Zero fee, or 15% of paid fees: no way to waive.
+  if (amount === 0 || !rng.bool(0.85)) return { amount, waiver: { logic: "any", conditions: [] } };
   return {
     amount,
-    waiver: waivable
-      ? { logic: rng.pick(["any", "all"] as const), conditions: waiverConditions(rng, family, minBalanceRange) }
-      : null,
+    waiver: { logic: rng.pick(["any", "all"] as const), conditions: waiverConditions(rng, family, minBalanceRange) },
   };
 }
 
@@ -88,12 +86,12 @@ function savingsInterest(rng: Rng, floorApy: number): { interest: Interest; topA
   };
 }
 
-function savingsBonus(rng: Rng): InterestBonus | null {
-  if (!rng.bool(0.5)) return null;
-  return {
+function savingsBonuses(rng: Rng): InterestBonus[] {
+  if (!rng.bool(0.5)) return [];
+  return [{
     trigger: rng.pick(["direct_deposit", "linked_checking"] as const),
     apyBoost: rng.rate(0.05, 0.5, 0.05),
-  };
+  }];
 }
 
 function product(
@@ -119,13 +117,13 @@ function sampleProducts(rng: Rng): BankConfig["products"] {
     minOpeningDeposit: rng.money(0, 100, 25),
     monthlyFee: monthlyFee(rng, "checking", basicCheckingFee, [500, 2500, 250]),
     interest: basicCheckingApy > 0 ? { structure: "flat", apy: basicCheckingApy } : { structure: "none" },
-    bonus: null,
+    bonuses: [],
   });
   const checkingPremium = product("checking", "premium", premiumName, {
     minOpeningDeposit: rng.money(500, 5000, 500),
     monthlyFee: monthlyFee(rng, "checking", basicCheckingFee + rng.money(5, 20, 1), [5000, 25000, 2500]),
     interest: { structure: "flat", apy: premiumCheckingApy },
-    bonus: null,
+    bonuses: [],
   });
 
   // Savings: Premium's lowest rate starts above Basic's highest rate.
@@ -137,13 +135,13 @@ function sampleProducts(rng: Rng): BankConfig["products"] {
     minOpeningDeposit: rng.money(0, 100, 25),
     monthlyFee: monthlyFee(rng, "savings", basicSavingsFee, [300, 1500, 100]),
     interest: basicSavings.interest,
-    bonus: savingsBonus(rng),
+    bonuses: savingsBonuses(rng),
   });
   const savingsPremium = product("savings", "premium", premiumName, {
     minOpeningDeposit: rng.money(1000, 10000, 500),
     monthlyFee: monthlyFee(rng, "savings", basicSavingsFee + rng.money(8, 20, 1), [5000, 25000, 2500]),
     interest: premiumSavings.interest,
-    bonus: savingsBonus(rng),
+    bonuses: savingsBonuses(rng),
   });
 
   return {
