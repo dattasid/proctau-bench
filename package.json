@@ -3,10 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Procedurally generated banking policy benchmark: config generator",
+  "description": "Procedurally generated banking policy benchmark: generator and executor",
   "scripts": {
     "generate": "node --experimental-strip-types --no-warnings src/cli.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --no-warnings --test \"test/**/*.test.ts\""
   },
   "engines": {
     "node": ">=22.6"

@@ -43,6 +43,16 @@ export interface Transaction {
   relatedId?: string; // refunds: the fee refunded; transfers: the other leg
 }
 
+// Next sequential id such as txn_0042: one past the highest numeric suffix in use.
+export function nextId(prefix: string, ids: Iterable<string>, width: number): string {
+  let max = 0;
+  for (const id of ids) {
+    const n = Number(id.slice(prefix.length + 1));
+    if (id.startsWith(`${prefix}_`) && n > max) max = n;
+  }
+  return `${prefix}_${String(max + 1).padStart(width, "0")}`;
+}
+
 export interface Database {
   schemaVersion: 1;
   customers: Record<string, Customer>;

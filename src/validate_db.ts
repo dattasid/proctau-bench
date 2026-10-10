@@ -25,7 +25,7 @@ export function validateDatabase(config: BankConfig, db: Database): string[] {
       err(`${t.id}: unknown account ${t.accountId}`);
       continue;
     }
-    if (t.date < account.openedOn || t.date >= today) err(`${t.id}: date ${t.date} outside account life`);
+    if (t.date < account.openedOn || t.date > today) err(`${t.id}: date ${t.date} outside account life`);
     if (t.relatedId !== undefined && !txnIds.has(t.relatedId)) err(`${t.id}: unknown related transaction`);
   }
 
@@ -33,7 +33,7 @@ export function validateDatabase(config: BankConfig, db: Database): string[] {
     if (a.id !== id) err(`${id}: id field is ${a.id}`);
     if (!db.customers[a.customerId]) err(`${id}: unknown customer ${a.customerId}`);
     if (!PRODUCT_IDS.includes(a.productId)) err(`${id}: unknown product ${a.productId}`);
-    if (a.openedOn >= today) err(`${id}: opened on or after the simulated date`);
+    if (a.openedOn > today) err(`${id}: opened after the simulated date`);
 
     const txns = db.transactions.filter((t) => t.accountId === id);
     const sum = txns.reduce((s, t) => s + t.amountCents, 0);

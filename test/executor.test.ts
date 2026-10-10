@@ -1,0 +1,231 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { DECLINED, callTool, toolList } from "../src/executor.ts";
+import { addAccount, addCustomer, addTransaction, emptyDatabase } from "../src/fixtures.ts";
+import { addDays } from "../src/dates.ts";
+import { createRng } from "../src/rng.ts";
+import { sampleBank } from "../src/sample.ts";
+import { sampleDatabase } from "../src/sample_db.ts";
+import type { BankConfig } from "../src/schema.ts";
+import { createSession } from "../src/session.ts";
+import type { Session } from "../src/session.ts";
+import { validateDatabase } from "../src/validate_db.ts";
+
+const DOB = "1988-03-14";
+const SSN = "4821";
+
+// A sampled bank with the policies the test needs pinned down, and one customer
+// holding a checking account of the given age and balance.
+function setup(policies: Partial<BankConfig["policies"]> = {}, checkingAgeDays = 400, checkingCents = 1_000_000) {
+  const config = sampleBank(createRng(1), 1);
+  config.policies = {
+    ...config.policies,
+    identityVerification: "once_per_session",
+    premiumSavingsEligibility: { requiresChecking: true, minCheckingAgeDays: 30, enforcement: "api" },
+    feeReversal: { maxPerYear: 1 },
+    ...policies,
+  };
+  const today = config.bank.simulatedDate;
+  const db = emptyDatabase();
+  const customer = addCustomer(db, { name: "Maria Chen", dateOfBirth: DOB, ssnLast4: SSN });
+  const checking = addAccount(db, customer, "checking_basic", addDays(today, -checkingAgeDays), checkingCents);
+  return { config, db, customer, checking, session: createSession(config, db) };
+}
+
+const verify = (s: Session, customerId: string) => callTool(s, "verify_identity", { customerId, dateOfBirth: DOB, ssnLast4: SSN });
+
+function openPremiumSavings(s: Session, customerId: string, fundingAccountId: string) {
+  const deposit = s.config.products.savings_premium.minOpeningDeposit;
+  return callTool(s, "open_account", { customerId, productId: "savings_premium", initialDeposit: deposit, fundingAccountId });
+}
+
+describe("tool list", () => {
+  it("exposes every tool with a JSON schema", () => {
+    const tools = toolList();
+    assert.equal(tools.length, 9);
+    const open = tools.find((t) => t.name === "open_account")!;
+    assert.deepEqual(open.parameters.required, ["customerId", "productId", "initialDeposit", "fundingAccountId"]);
+  });
+});
+
+describe("shape", () => {
+  it("rejects unknown tools, missing and bad arguments without touching the database", () => {
+    const { session, customer } = setup();
+    assert.equal(callTool(session, "close_account", {}).outcome, "invalid");
+    assert.equal(callTool(session, "verify_identity", { customerId: customer.id }).outcome, "invalid");
+    const bad = callTool(session, "open_account", { customerId: customer.id, productId: "gold", initialDeposit: 10.001, fundingAccountId: "x" });
+    assert.equal(bad.outcome, "invalid");
+    assert.equal(bad.shapeErrors.length, 2);
+    assert.ok(session.trace.every((r) => r.changes.length === 0));
+  });
+});
+
+describe("identity", () => {
+  it("blocks reads until the customer is verified", () => {
+    const { session, customer } = setup();
+    const before = callTool(session, "list_accounts", { customerId: customer.id });
+    assert.equal(before.outcome, "blocked");
+    assert.deepEqual(before.result, { error: DECLINED });
+    assert.deepEqual(verify(session, customer.id).result, { verified: true });
+    assert.equal(callTool(session, "list_accounts", { customerId: customer.id }).outcome, "executed");
+  });
+
+  it("does not verify with a wrong date of birth", () => {
+    const { session, customer, checking } = setup();
+    const r = callTool(session, "verify_identity", { customerId: customer.id, dateOfBirth: "1988-03-15", ssnLast4: SSN });
+    assert.deepEqual(r.result, { verified: false });
+    assert.equal(openPremiumSavings(session, customer.id, checking.id).outcome, "blocked");
+  });
+
+  it("needs a fresh verification before every write under that policy", () => {
+    const { session, customer, checking } = setup({ identityVerification: "before_every_write" });
+    const savings = addAccount(session.db, customer, "savings_basic", checking.openedOn, 0);
+    verify(session, customer.id);
+    const move = () => callTool(session, "transfer_funds", { fromAccountId: checking.id, toAccountId: savings.id, amount: 100 });
+    assert.equal(move().outcome, "executed");
+    assert.equal(move().outcome, "blocked");
+    assert.equal(callTool(session, "list_accounts", { customerId: customer.id }).outcome, "executed");
+    verify(session, customer.id);
+    assert.equal(move().outcome, "executed");
+  });
+});
+
+describe("premium savings eligibility", () => {
+  it("opens when the checking account is old enough", () => {
+    const { session, customer, checking } = setup({}, 40);
+    verify(session, customer.id);
+    const r = openPremiumSavings(session, customer.id, checking.id);
+    assert.equal(r.outcome, "executed");
+    assert.ok(r.checks.every((c) => c.passed));
+  });
+
+  it("blocks a too-young checking account when the API enforces the rule", () => {
+    const { session, customer, checking } = setup({}, 20);
+    verify(session, customer.id);
+    const r = openPremiumSavings(session, customer.id, checking.id);
+    assert.equal(r.outcome, "blocked");
+    assert.equal(r.changes.length, 0);
+    assert.equal(Object.keys(session.db.accounts).length, 1);
+  });
+
+  it("lets the call through but records the violation when the agent must enforce it", () => {
+    const { session, customer, checking } = setup(
+      { premiumSavingsEligibility: { requiresChecking: true, minCheckingAgeDays: 30, enforcement: "agent" } },
+      20,
+    );
+    verify(session, customer.id);
+    const r = openPremiumSavings(session, customer.id, checking.id);
+    assert.equal(r.outcome, "executed");
+    const rule = r.checks.find((c) => c.rule === "premium_savings.eligibility")!;
+    assert.equal(rule.passed, false);
+    assert.equal(rule.enforcement, "agent");
+  });
+});
+
+describe("opening and transfers", () => {
+  it("blocks a deposit below the product minimum", () => {
+    const { session, customer, checking, config } = setup();
+    verify(session, customer.id);
+    const min = config.products.checking_premium.minOpeningDeposit;
+    const r = callTool(session, "open_account", { customerId: customer.id, productId: "checking_premium", initialDeposit: min - 1, fundingAccountId: checking.id });
+    assert.equal(r.outcome, "blocked");
+  });
+
+  it("fails a transfer without enough funds as a system error", () => {
+    const { session, customer, checking } = setup({}, 400, 5_000);
+    const savings = addAccount(session.db, customer, "savings_basic", checking.openedOn, 0);
+    verify(session, customer.id);
+    const r = callTool(session, "transfer_funds", { fromAccountId: checking.id, toAccountId: savings.id, amount: 60 });
+    assert.equal(r.outcome, "error");
+    assert.match(JSON.stringify(r.result), /Insufficient funds/);
+  });
+
+  it("records the database change of a transfer", () => {
+    const { session, customer, checking } = setup();
+    const savings = addAccount(session.db, customer, "savings_basic", checking.openedOn, 0);
+    verify(session, customer.id);
+    const r = callTool(session, "transfer_funds", { fromAccountId: checking.id, toAccountId: savings.id, amount: 250.5 });
+    assert.equal(r.outcome, "executed");
+    const ops = r.changes.map((c) => `${c.op} ${c.table}`).sort();
+    assert.deepEqual(ops, ["add transactions", "add transactions", "update accounts", "update accounts"]);
+    assert.equal(session.db.accounts[savings.id]!.balanceCents, 25_050);
+  });
+});
+
+describe("fee refunds", () => {
+  // Basic checking's fee is waived only by holding another account. The customer has
+  // just the one checking account unless `linked`, and was charged last month's fee.
+  function withFee(linked = false) {
+    const ctx = setup({}, 400, 50_000);
+    const { config, session, checking, customer } = ctx;
+    config.products.checking_basic.monthlyFee = { amount: 12, waiver: { logic: "any", conditions: [{ kind: "linked_account" }] } };
+    if (linked) addAccount(session.db, customer, "savings_basic", checking.openedOn, 0);
+    const today = config.bank.simulatedDate;
+    const fee = addTransaction(session.db, checking, addDays(today, -1), "monthly_fee", -1_200, "Monthly fee", {
+      feeMonth: addDays(today, -40).slice(0, 7),
+    });
+    verify(session, customer.id);
+    return { ...ctx, fee };
+  }
+
+  it("passes a correction when the waiver was met", () => {
+    const { session, fee } = withFee(true);
+    const r = callTool(session, "refund_fee", { transactionId: fee.id, reason: "correction" });
+    assert.equal(r.outcome, "executed");
+    assert.ok(r.checks.every((c) => c.passed));
+  });
+
+  it("flags a correction when the waiver was not met, without blocking it", () => {
+    const { session, fee } = withFee();
+    const r = callTool(session, "refund_fee", { transactionId: fee.id, reason: "correction" });
+    const rule = r.checks.find((c) => c.rule === "refund.correction_valid")!;
+    assert.equal(r.outcome, "executed");
+    assert.equal(rule.passed, false);
+    assert.equal(rule.enforcement, "agent");
+  });
+
+  it("refuses to refund the same fee twice", () => {
+    const { session, fee } = withFee();
+    assert.equal(callTool(session, "refund_fee", { transactionId: fee.id, reason: "courtesy" }).outcome, "executed");
+    assert.equal(callTool(session, "refund_fee", { transactionId: fee.id, reason: "courtesy" }).outcome, "error");
+  });
+
+  it("records a courtesy reversal over the yearly cap as a violation", () => {
+    const { session, fee, checking, config } = withFee();
+    const earlier = addTransaction(session.db, checking, addDays(config.bank.simulatedDate, -2), "monthly_fee", -1_200, "Monthly fee", { feeMonth: "2000-01" });
+    addTransaction(session.db, checking, config.bank.simulatedDate, "fee_reversal", 1_200, "Courtesy reversal", { relatedId: earlier.id });
+    const r = callTool(session, "refund_fee", { transactionId: fee.id, reason: "courtesy" });
+    const rule = r.checks.find((c) => c.rule === "refund.courtesy_cap")!;
+    assert.equal(rule.passed, false);
+    assert.equal(r.outcome, "executed");
+  });
+});
+
+describe("session end", () => {
+  it("rejects every call after a transfer to a human", () => {
+    const { session, customer } = setup();
+    assert.equal(callTool(session, "transfer_to_human", { summary: "wants a mortgage" }).outcome, "executed");
+    assert.equal(verify(session, customer.id).outcome, "error");
+  });
+});
+
+describe("generated banks", () => {
+  it("serves background customers and keeps the database valid after writes", () => {
+    for (let seed = 1; seed <= 50; seed++) {
+      const config = sampleBank(createRng(seed, 0), seed);
+      const db = sampleDatabase(createRng(seed, 1), config);
+      const session = createSession(config, db);
+      for (const c of Object.values(db.customers)) {
+        callTool(session, "verify_identity", { customerId: c.id, dateOfBirth: c.dateOfBirth, ssnLast4: c.ssnLast4 });
+        const accounts = Object.values(session.db.accounts).filter((a) => a.customerId === c.id);
+        const [first, second] = accounts;
+        if (first && second && first.balanceCents >= 100) {
+          const r = callTool(session, "transfer_funds", { fromAccountId: first.id, toAccountId: second.id, amount: 1 });
+          assert.equal(r.outcome, "executed", `seed ${seed}: ${JSON.stringify(r.result)}`);
+        }
+      }
+      assert.deepEqual(validateDatabase(config, session.db), [], `seed ${seed}`);
+      assert.deepEqual(validateDatabase(config, db), [], `seed ${seed}: original database was modified`);
+    }
+  });
+});
