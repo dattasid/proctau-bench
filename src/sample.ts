@@ -33,9 +33,9 @@ function title(family: Family): string {
   return family === "checking" ? "Checking" : "Savings";
 }
 
-// TODO: with "all" logic, any subset is allowed, so a waiver can demand a high balance,
-// direct deposits and a senior age at once. That is satisfiable but unrealistic, and
-// almost no background customer meets it. Constrain the combinations later.
+// With "all" logic any subset is allowed, so a waiver can demand a high balance, direct
+// deposits and a senior age at once. Unrealistic but intentional: rare, valid rules test
+// whether the agent reads the policy instead of applying common-bank priors.
 function waiverConditions(
   rng: Rng,
   family: Family,
