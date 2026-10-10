@@ -18,8 +18,10 @@ function mixSeed(seed: number): number {
   return (h ^ (h >>> 16)) >>> 0;
 }
 
-export function createRng(seed: number): Rng {
-  let a = mixSeed(seed);
+// `stream` gives independent sequences for one seed (config, database, documents),
+// so changing how one is sampled never shifts the others. Stream 0 is the config.
+export function createRng(seed: number, stream = 0): Rng {
+  let a = mixSeed((seed + Math.imul(stream, 0x9e3779b9)) >>> 0);
   const next = (): number => {
     a = (a + 0x6d2b79f5) >>> 0;
     let t = a;
