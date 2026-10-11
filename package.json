@@ -7,7 +7,9 @@
   "scripts": {
     "generate": "node --experimental-strip-types --no-warnings src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --no-warnings --test \"test/**/*.test.ts\""
+    "test": "node --experimental-strip-types --no-warnings --test \"test/**/*.test.ts\"",
+    "serve": "node --experimental-strip-types --no-warnings src/serve.ts",
+    "harness": "node --experimental-strip-types --no-warnings src/harness/cli.ts"
   },
   "engines": {
     "node": ">=22.6"

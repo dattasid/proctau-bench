@@ -1,8 +1,10 @@
 // Building blocks for placing specific customers into a database: the start of the
 // task fixture builder. Each helper writes records consistent with the shared rules.
 
+import { addMonths, monthOf, monthStart } from "./dates.ts";
+import { monthlyFeeDue } from "./rules.ts";
 import { postTransaction } from "./session.ts";
-import type { ProductId } from "./schema.ts";
+import type { BankConfig, ProductId } from "./schema.ts";
 import { nextId } from "./state.ts";
 import type { Account, Customer, Database, Transaction, TransactionKind } from "./state.ts";
 
@@ -29,6 +31,16 @@ export function addAccount(db: Database, customer: Customer, productId: ProductI
   db.accounts[account.id] = account;
   postTransaction(db, account, openedOn, "opening_deposit", balanceCents, "Opening deposit");
   return account;
+}
+
+// Posts every monthly fee the rules require between the account's opening and `today`,
+// oldest first, so a fixture account's history is as consistent as a generated one.
+// Call it after the account's other history is in place.
+export function chargeMonthlyFees(config: BankConfig, db: Database, account: Account, today: string): void {
+  for (let month = monthOf(account.openedOn); monthStart(addMonths(month, 1)) < today; month = addMonths(month, 1)) {
+    const fee = monthlyFeeDue(config, db, account, month);
+    if (fee > 0) postTransaction(db, account, monthStart(addMonths(month, 1)), "monthly_fee", -fee, `Monthly fee for ${month}`, { feeMonth: month });
+  }
 }
 
 export function addTransaction(
