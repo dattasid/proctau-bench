@@ -30,35 +30,48 @@ export interface ConditionResult {
   observed: number; // cents for balances and deposits, years for age, 1/0 for a linked account
 }
 
+// Whether one waiver condition held for `month` (YYYY-MM), with the value it was judged on, so a
+// trace or a refund check can show why a fee was or wasn't waived.
 function evaluateCondition(db: Database, account: Account, month: string, c: WaiverCondition): ConditionResult {
   const start = monthStart(month);
   const end = monthEnd(month);
   switch (c.kind) {
     case "min_balance": {
+      // End-of-day balances for every day of the month: daily_minimum takes the lowest day,
+      // monthly_average the mean of all days. Only full months are charged, so every day counts.
       const balances = endOfDayBalances(db, account.id, start, end);
       const observed =
         c.measure === "daily_minimum" ? Math.min(...balances) : balances.reduce((s, b) => s + b, 0) / balances.length;
       return { condition: c, met: observed >= c.amount * 100, observed: Math.floor(observed) };
     }
     case "direct_deposit": {
+      // Direct deposits into this account during the month; deposits to the customer's other
+      // accounts do not count.
       const observed = db.transactions
         .filter((t) => t.accountId === account.id && t.kind === "direct_deposit" && t.date >= start && t.date <= end)
         .reduce((s, t) => s + t.amountCents, 0);
       return { condition: c, met: observed >= c.minMonthlyAmount * 100, observed };
     }
     case "linked_account": {
+      // Any other open account of the same customer, of any type, opened by the month's last day,
+      // so one opened mid-month counts for the whole month. Status is today's, not the month's:
+      // an account closed since then no longer counts.
       const linked = Object.values(db.accounts).some(
         (a) => a.id !== account.id && a.customerId === account.customerId && a.status === "open" && a.openedOn <= end,
       );
       return { condition: c, met: linked, observed: linked ? 1 : 0 };
     }
     case "senior": {
+      // Age on the month's last day, so a birthday during the month counts.
       const age = ageOn(db.customers[account.customerId]!.dateOfBirth, end);
       return { condition: c, met: age >= c.minAge, observed: age };
     }
   }
 }
 
+// Whether `month`'s fee is waived. Every condition is evaluated, not just until the answer is known,
+// so the results show each one. "any": one met condition waives; "all": every one must be met.
+// No conditions: never waived.
 export function evaluateWaiver(
   config: BankConfig,
   db: Database,
@@ -85,6 +98,8 @@ export function courtesyReversalsInYear(db: Database, customerId: string, year: 
     .length;
 }
 
+// Whether the customer holds an open account of the required type, any tier, opened at least
+// minAgeDays before `onDate`. A closed account never qualifies, however long it was held.
 export function requirementMet(config: BankConfig, db: Database, customerId: string, r: Requirement, onDate: string): boolean {
   switch (r.kind) {
     case "holds_account":
@@ -115,7 +130,7 @@ export function highestApy(interest: Interest): number {
   return interest.tiers.at(-1)!.apy;
 }
 
-// A year's interest at a constant balance: the quote the agent is expected to give.
+// A year's interest at a constant balance. This is the quote the agent is expected to give.
 export function annualInterestCents(interest: Interest, balanceCents: number, apyBoost = 0): number {
   if (interest.structure === "none") return 0;
   if (interest.structure === "flat") return Math.round((balanceCents * (interest.apy + apyBoost)) / 100);
