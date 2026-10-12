@@ -21,6 +21,7 @@ export interface RunResult {
   taskId: string;
   agentModel: string;
   userModel: string;
+  prompts: { agent: string; user: string }; // system prompts exactly as sent
   turns: Turn[];
   trace: TraceRecord[];
   notes: string[];
@@ -58,9 +59,10 @@ export async function runTask(bank: Bank, task: Task, opts: RunOptions): Promise
   const tools: ChatTool[] = opts.tools.map((t) => ({ type: "function", function: t }));
   const env = await EnvClient.create(opts.baseUrl, bank.config, task.db);
 
-  const agentMsgs: ChatMessage[] = [{ role: "system", content: agentSystemPrompt(bank.config, bank.docs) }];
+  const prompts = { agent: agentSystemPrompt(bank.config, bank.docs), user: userSystemPrompt(task.user.instructions) };
+  const agentMsgs: ChatMessage[] = [{ role: "system", content: prompts.agent }];
   // The simulator plays the customer, so roles are mirrored in its history.
-  const userMsgs: ChatMessage[] = [{ role: "system", content: userSystemPrompt(task.user.instructions) }];
+  const userMsgs: ChatMessage[] = [{ role: "system", content: prompts.user }];
   const turns: Turn[] = [];
   const agentSays = (text: string) => {
     agentMsgs.push({ role: "assistant", content: text });
@@ -115,6 +117,7 @@ export async function runTask(bank: Bank, task: Task, opts: RunOptions): Promise
       taskId: task.id,
       agentModel: opts.agentModel,
       userModel: opts.userModel,
+      prompts,
       turns,
       trace,
       notes,

@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>procbank runs</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e3e2dd;
+  --accent: #2f5fd0; --sel: #e8eefc;
+  --good: #1f7a3d; --good-bg: #e3f3e8; --bad: #b42318; --bad-bg: #fbe7e5;
+  --warn: #8a5a00; --warn-bg: #fdf0d5; --neutral-bg: #efeeea;
+  --agent-bg: #ffffff; --user-bg: #e8eefc; --code-bg: #f2f1ed;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615; --panel: #1f1f1d; --text: #e9e8e4; --muted: #9b9a94; --line: #34332f;
+    --accent: #7ea2ff; --sel: #26314d;
+    --good: #6fd08f; --good-bg: #1d3325; --bad: #ff8b7f; --bad-bg: #3d1f1c;
+    --warn: #f2c063; --warn-bg: #3a2f17; --neutral-bg: #2b2a27;
+    --agent-bg: #262624; --user-bg: #26314d; --code-bg: #252522;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; }
+button { font: inherit; color: inherit; }
+pre, code { font-family: var(--mono); font-size: 12.5px; }
+pre { background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; margin: 6px 0; white-space: pre-wrap; word-break: break-word; }
+
+aside { width: 340px; min-width: 260px; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; height: 100vh; }
+aside header { padding: 12px 14px; border-bottom: 1px solid var(--line); display: grid; gap: 8px; }
+aside h1 { font-size: 15px; margin: 0; display: flex; justify-content: space-between; align-items: center; }
+aside input[type=search] { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); }
+.controls { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 13px; }
+.iconbtn { border: 1px solid var(--line); background: var(--bg); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+#tree { overflow-y: auto; flex: 1; padding: 6px 0; }
+details.batch > summary { list-style: none; cursor: pointer; padding: 6px 14px; }
+details.batch > summary::-webkit-details-marker { display: none; }
+details.batch > summary .path { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+details.batch > summary .sub { color: var(--muted); font-size: 12px; }
+details.batch > summary::before { content: "▸"; color: var(--muted); margin-right: 6px; display: inline-block; transition: transform .1s; }
+details.batch[open] > summary::before { transform: rotate(90deg); }
+.run { display: flex; gap: 8px; align-items: baseline; width: 100%; text-align: left; border: 0; background: none; padding: 5px 14px 5px 30px; cursor: pointer; }
+.run:hover { background: var(--bg); }
+.run.sel { background: var(--sel); }
+.run .name { font-size: 13px; word-break: break-all; }
+.run .sub { color: var(--muted); font-size: 12px; }
+
+main { flex: 1; height: 100vh; overflow-y: auto; }
+.empty { color: var(--muted); padding: 40px; }
+.head { padding: 16px 24px 0; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 1; }
+.head h2 { margin: 0 0 6px; font-size: 17px; font-family: var(--mono); font-weight: 600; word-break: break-all; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.chip { border-radius: 999px; padding: 1px 9px; font-size: 12px; background: var(--neutral-bg); white-space: nowrap; }
+.chip.good { background: var(--good-bg); color: var(--good); }
+.chip.bad { background: var(--bad-bg); color: var(--bad); }
+.chip.warn { background: var(--warn-bg); color: var(--warn); }
+.badge { font-size: 11px; font-weight: 700; border-radius: 4px; padding: 0 5px; flex: none; }
+.badge.good { background: var(--good-bg); color: var(--good); }
+.badge.bad { background: var(--bad-bg); color: var(--bad); }
+.tabs { display: flex; gap: 2px; overflow-x: auto; }
+.tab { border: 0; background: none; padding: 8px 14px; cursor: pointer; border-bottom: 2px solid transparent; color: var(--muted); white-space: nowrap; }
+.tab.on { color: var(--text); border-bottom-color: var(--accent); }
+.body { padding: 20px 24px 60px; max-width: 1100px; }
+h3 { font-size: 14px; margin: 22px 0 8px; }
+h3:first-child { margin-top: 0; }
+
+.msg { max-width: 80%; margin: 10px 0; }
+.msg .who { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+.msg .text { background: var(--agent-bg); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; white-space: pre-wrap; }
+.msg.user { margin-left: auto; }
+.msg.user .who { text-align: right; }
+.msg.user .text { background: var(--user-bg); border-color: transparent; }
+.call { margin: 6px 0; max-width: 80%; font-size: 13px; }
+.call summary { cursor: pointer; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+.call summary .tool { color: var(--text); }
+.call a { color: var(--accent); font-size: 12px; margin-left: 6px; }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+.card.target { outline: 2px solid var(--accent); }
+.card .top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.card .top .tool { font-family: var(--mono); font-weight: 600; }
+.card .top .idx { color: var(--muted); font-family: var(--mono); }
+.label { color: var(--muted); font-size: 12px; margin-top: 8px; }
+ul.checks, ul.plain { list-style: none; padding: 0; margin: 4px 0; }
+ul.checks li { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; flex-wrap: wrap; }
+ul.checks .rule { font-family: var(--mono); font-size: 12.5px; }
+ul.checks .detail { color: var(--muted); font-size: 13px; }
+.doclinks { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.doclinks a { font-family: var(--mono); font-size: 12px; color: var(--accent); text-decoration: none; }
+.doc { margin-bottom: 18px; }
+.doc .path { font-family: var(--mono); font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 4px; margin-bottom: 6px; }
+.doc .content { white-space: pre-wrap; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; }
+details.fold > summary { cursor: pointer; color: var(--accent); margin: 8px 0; }
+.note { color: var(--muted); }
+dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; }
+dl.kv dt { color: var(--muted); }
+dl.kv dd { margin: 0; font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
+
+@media (max-width: 760px) {
+  body { flex-direction: column; }
+  aside { width: 100%; height: 40vh; border-right: 0; border-bottom: 1px solid var(--line); }
+  main { height: 60vh; }
+  .head, .body { padding-left: 16px; padding-right: 16px; }
+  .msg, .call { max-width: 95%; }
+}
+</style>
+</head>
+<body>
+<aside>
+  <header>
+    <h1>procbank runs <button class="iconbtn" id="refresh" title="Reload the run list">Reload</button></h1>
+    <input type="search" id="filter" placeholder="Filter by task, template, seed or batch">
+    <div class="controls">
+      <label><input type="checkbox" id="failOnly"> Failures only</label>
+      <span id="count"></span>
+    </div>
+  </header>
+  <div id="tree"></div>
+</aside>
+<main id="main"><div class="empty">Pick a run on the left.</div></main>
+
+<script>
+"use strict";
+const $ = (sel, el = document) => el.querySelector(sel);
+const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const json = (v) => `<pre>${esc(JSON.stringify(v, null, 2))}</pre>`;
+const chip = (text, kind = "") => `<span class="chip ${kind}">${esc(text)}</span>`;
+const OUTCOME_KIND = { executed: "good", blocked: "warn", error: "bad", invalid: "bad" };
+const TABS = [["chat", "Conversation"], ["tools", "Tool calls"], ["bank", "Config and docs"], ["task", "Task and evaluation"]];
+
+let index = null;
+let current = null; // { batch, file, data }
+
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  return { batch: p.get("b"), file: p.get("f"), tab: p.get("t") || "chat", at: p.get("at") };
+}
+function writeHash(h) {
+  const p = new URLSearchParams();
+  if (h.batch) p.set("b", h.batch);
+  if (h.file) p.set("f", h.file);
+  if (h.tab) p.set("t", h.tab);
+  if (h.at) p.set("at", h.at);
+  const next = "#" + p.toString();
+  if (location.hash !== next) location.hash = next;
+  else route();
+}
+
+async function getJson(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+// ---------- sidebar ----------
+
+async function loadIndex() {
+  index = await getJson("/api/index");
+  renderTree();
+}
+
+function renderTree() {
+  const q = $("#filter").value.trim().toLowerCase();
+  const failOnly = $("#failOnly").checked;
+  const sel = readHash();
+  let shown = 0, total = 0;
+  const html = index.batches.map((b, i) => {
+    total += b.runs.length;
+    const runs = b.runs.filter((r) =>
+      (!failOnly || !r.pass) &&
+      (!q || [r.taskId, r.template, String(r.bankSeed), b.path].some((s) => s.toLowerCase().includes(q))));
+    if (runs.length === 0) return "";
+    shown += runs.length;
+    const passed = b.runs.filter((r) => r.pass).length;
+    const m = b.meta || {};
+    const model = m.agentModel ? ` · ${m.agentModel}` : "";
+    const open = i === 0 || sel.batch === b.path || q || failOnly;
+    return `<details class="batch" ${open ? "open" : ""}>
+      <summary><span class="path">${esc(b.path)}</span><div class="sub">${passed}/${b.runs.length} passed${esc(model)}${m.finishedAt ? "" : m.startedAt ? " · unfinished" : ""}</div></summary>
+      ${runs.map((r) => `<button class="run ${sel.batch === b.path && sel.file === r.file ? "sel" : ""}" data-batch="${esc(b.path)}" data-file="${esc(r.file)}">
+        <span class="badge ${r.pass ? "good" : "bad"}">${r.pass ? "PASS" : "FAIL"}</span>
+        <span><div class="name">${esc(r.taskId)}</div><div class="sub">${esc(r.endReason)} · ${r.calls} calls · ${r.turns} messages${r.violations ? ` · ${r.violations} violations` : ""}${r.dbMatch ? "" : " · end state differs"}</div></span>
+      </button>`).join("")}
+    </details>`;
+  }).join("");
+  $("#tree").innerHTML = html || `<div class="empty">No runs${index.batches.length ? " match" : ` in ${esc(index.root)}`}.</div>`;
+  $("#count").textContent = `${shown} of ${total} runs`;
+}
+
+$("#tree").addEventListener("click", (e) => {
+  const btn = e.target.closest(".run");
+  if (btn) writeHash({ batch: btn.dataset.batch, file: btn.dataset.file, tab: readHash().tab });
+});
+$("#filter").addEventListener("input", renderTree);
+$("#failOnly").addEventListener("change", renderTree);
+$("#refresh").addEventListener("click", () => loadIndex().catch(showError));
+
+// ---------- run view ----------
+
+async function route() {
+  const h = readHash();
+  if (index) renderTree();
+  if (!h.batch || !h.file) return;
+  if (!current || current.batch !== h.batch || current.file !== h.file) {
+    $("#main").innerHTML = `<div class="empty">Loading…</div>`;
+    const data = await getJson(`/api/run?batch=${encodeURIComponent(h.batch)}&file=${encodeURIComponent(h.file)}`);
+    current = { batch: h.batch, file: h.file, data };
+  }
+  renderRun(h.tab, h.at);
+}
+
+function renderRun(tab, at) {
+  const { task, result, bank } = current.data;
+  const e = result.evaluation;
+  const chips = [
+    chip(e.pass ? "PASS" : "FAIL", e.pass ? "good" : "bad"),
+    chip(e.dbMatch ? "end state matches gold" : "end state differs", e.dbMatch ? "good" : "bad"),
+    chip(`${e.violations.length} violations`, e.violations.length ? "bad" : ""),
+    ...(e.blockedAttempts.length ? [chip(`${e.blockedAttempts.length} blocked`, "warn")] : []),
+    chip(`ended: ${e.endReason}`),
+    chip(`bank seed ${task.bankSeed}`),
+    ...(bank ? [chip(`today ${bank.config.bank.simulatedDate}`), chip(bank.config.bank.name)] : []),
+    chip(`agent ${result.agentModel}`),
+    chip(`user ${result.userModel}`),
+  ].join("");
+  const tabs = TABS.map(([id, label]) => `<button class="tab ${id === tab ? "on" : ""}" data-tab="${id}">${label}</button>`).join("");
+  const body = { chat: renderChat, tools: renderTools, bank: renderBank, task: renderTask }[tab] || renderChat;
+  $("#main").innerHTML = `<div class="head"><h2>${esc(task.id)}</h2><div class="chips">${chips}</div><div class="tabs">${tabs}</div></div>
+    <div class="body">${body(current.data)}</div>`;
+  $("#main").scrollTop = 0;
+  if (at) {
+    const target = document.getElementById(at);
+    if (target) { target.classList.add("target"); target.scrollIntoView({ block: "center" }); }
+  }
+}
+
+$("#main").addEventListener("click", (e) => {
+  const t = e.target.closest(".tab");
+  if (t) { const h = readHash(); writeHash({ ...h, tab: t.dataset.tab, at: null }); return; }
+  const jump = e.target.closest("[data-jump]");
+  if (jump) { e.preventDefault(); const h = readHash(); writeHash({ ...h, tab: "tools", at: jump.dataset.jump }); }
+});
+
+// Runs recorded before prompts were saved fall back to the bank snapshot's agent prompt.
+function renderPrompts({ result, bank }) {
+  const agent = result.prompts?.agent ?? bank?.agentPrompt;
+  const user = result.prompts?.user;
+  const fold = (title, text) => `<details class="fold"><summary>${title}</summary>${text == null
+    ? `<p class="note">Not saved for this run.</p>` : `<pre>${esc(text)}</pre>`}</details>`;
+  return fold("Agent system prompt", agent) + fold("Customer simulator system prompt", user);
+}
+
+function renderChat({ result, bank }) {
+  let k = 0;
+  return renderPrompts({ result, bank }) + result.turns.map((t) => {
+    if (t.role === "tool") {
+      const i = k++;
+      const args = JSON.stringify(t.args);
+      return `<details class="call"><summary><span class="tool">${esc(t.tool)}</span>(${esc(args.length > 90 ? args.slice(0, 90) + "…" : args)}) ${chip(t.outcome, OUTCOME_KIND[t.outcome])}<a href="#" data-jump="call-${i}">#${i} in tool calls</a></summary>
+        <div class="label">Arguments</div>${json(t.args)}<div class="label">Result</div>${json(t.result)}</details>`;
+    }
+    const who = t.role === "agent" ? "Agent" : "Customer";
+    return `<div class="msg ${t.role}"><div class="who">${who}</div><div class="text">${esc(t.content)}</div></div>`;
+  }).join("") + `<p class="note">Conversation ended: ${esc(result.evaluation.endReason)}.</p>`;
+}
+
+function renderTools({ result }) {
+  if (result.trace.length === 0) return `<p class="note">The agent made no tool calls.</p>`;
+  return result.trace.map((r) => {
+    const checks = r.checks.length ? `<div class="label">Checks</div><ul class="checks">${r.checks.map((c) =>
+      `<li>${chip(c.passed ? "pass" : "fail", c.passed ? "good" : "bad")}<span class="rule">${esc(c.rule)}</span>${chip(c.kind)}${c.enforcement ? chip(`enforced by ${c.enforcement}`) : ""}${c.detail ? `<span class="detail">${esc(c.detail)}</span>` : ""}</li>`).join("")}</ul>` : "";
+    const shape = r.shapeErrors.length ? `<div class="label">Shape errors</div><ul class="plain">${r.shapeErrors.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>` : "";
+    const changes = r.changes.length ? `<div class="label">Database changes</div><ul class="plain">${r.changes.map((c) =>
+      `<li><code>${esc(c.op)} ${esc(c.table)} ${esc(c.id)}</code></li>`).join("")}</ul><details class="fold"><summary>Change details</summary>${json(r.changes)}</details>` : "";
+    return `<div class="card" id="call-${r.index}">
+      <div class="top"><span class="idx">#${r.index}</span><span class="tool">${esc(r.tool)}</span>${chip(r.outcome, OUTCOME_KIND[r.outcome])}<span class="note">${esc(r.at)}</span></div>
+      <div class="label">Arguments</div>${json(r.args)}${shape}${checks}
+      <div class="label">Result</div>${json(r.result)}${changes}
+    </div>`;
+  }).join("");
+}
+
+function renderBank({ bank }) {
+  if (!bank) return `<p class="note">This batch was recorded before the harness saved bank snapshots, so its config and documents are not available. Banks are not regenerated from the seed, because code changes can change what a seed produces.</p>`;
+  const links = bank.docs.map((d, i) => `<a href="#" data-doc="doc-${i}">${esc(d.path)}</a>`).join("");
+  const docs = bank.docs.map((d, i) => `<div class="doc" id="doc-${i}"><div class="path">${esc(d.path)}</div><div class="content">${esc(d.content.trim())}</div></div>`).join("");
+  return `<details class="fold" open><summary>Config</summary>${json(bank.config)}</details>
+    <h3>Documents (${bank.docs.length})</h3><div class="doclinks">${links}</div>${docs}
+    <details class="fold"><summary>Agent system prompt, exactly as sent</summary><pre>${esc(bank.agentPrompt)}</pre></details>`;
+}
+
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("[data-doc]");
+  if (a) { e.preventDefault(); document.getElementById(a.dataset.doc).scrollIntoView({ block: "start" }); }
+});
+
+function renderTask({ task, result }) {
+  const e = result.evaluation;
+  const list = (items, fmt) => items.length ? `<ul class="checks">${items.map(fmt).join("")}</ul>` : `<p class="note">None.</p>`;
+  return `<h3>Customer instructions (private to the user simulator)</h3><pre>${esc(task.user.instructions)}</pre>
+    <h3>Intended rule verdicts</h3>${list(task.intended, (i) => `<li>${chip(i.passed ? "pass" : "fail", i.passed ? "good" : "bad")}<span class="rule">${esc(i.rule)}</span></li>`)}
+    <h3>Gold calls</h3>${task.goldCalls.map((c, i) => `<div class="label">${i + 1}. <code>${esc(c.tool)}</code></div>${json(c.args)}`).join("")}
+    <h3>Evaluation</h3>
+    <dl class="kv">
+      <dt>Pass</dt><dd>${e.pass}</dd>
+      <dt>End state</dt><dd>${e.dbMatch ? "matches gold" : "differs from gold"}</dd>
+      <dt>Final hash</dt><dd>${esc(result.finalHash)}</dd>
+      <dt>Gold hash</dt><dd>${esc(task.goldHash)}</dd>
+      <dt>Ended</dt><dd>${esc(e.endReason)}</dd>
+      <dt>Calls</dt><dd>${e.counts.calls} (${e.counts.executed} executed, ${e.counts.error} errors, ${e.counts.invalid} invalid, ${e.counts.blocked} blocked)</dd>
+    </dl>
+    <h3>Violations</h3>${list(e.violations, (v) => `<li><a href="#" data-jump="call-${v.index}">#${v.index}</a><code>${esc(v.tool)}</code><span class="rule">${esc(v.rule)}</span></li>`)}
+    ${e.blockedAttempts.length ? `<h3>Blocked attempts</h3>${list(e.blockedAttempts, (v) => `<li><a href="#" data-jump="call-${v.index}">#${v.index}</a><code>${esc(v.tool)}</code><span class="rule">${esc(v.rule)}</span></li>`)}` : ""}
+    <h3>Agent notes (log_interaction)</h3>${list(result.notes, (n) => `<li>${esc(n)}</li>`)}
+    <details class="fold" id="startdb"><summary>Starting database</summary></details>`;
+}
+
+// The starting database is large, so it is rendered only when opened.
+document.addEventListener("toggle", (e) => {
+  if (e.target.id === "startdb" && e.target.open && !e.target.dataset.done) {
+    e.target.insertAdjacentHTML("beforeend", json(current.data.task.db));
+    e.target.dataset.done = "1";
+  }
+}, true);
+
+function showError(err) {
+  $("#main").innerHTML = `<div class="empty">Could not load: ${esc(err.message || err)}</div>`;
+}
+
+window.addEventListener("hashchange", () => route().catch(showError));
+loadIndex().then(route).catch(showError);
+</script>
+</body>
+</html>
