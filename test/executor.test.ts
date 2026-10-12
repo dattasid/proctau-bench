@@ -10,7 +10,7 @@ import { sampleDatabase } from "../src/gen/sample_db.ts";
 import type { BankConfig } from "../src/bank/schema.ts";
 import { createSession } from "../src/env/session.ts";
 import type { Session } from "../src/env/session.ts";
-import { validateDatabase } from "../src/bank/validate_db.ts";
+import { strictProblems } from "../src/bank/validate_db.ts";
 
 const DOB = "1988-03-14";
 const SSN = "4821";
@@ -232,8 +232,8 @@ describe("generated banks", () => {
           assert.equal(r.outcome, "executed", `seed ${seed}: ${JSON.stringify(r.result)}`);
         }
       }
-      assert.deepEqual(validateDatabase(config, session.db), [], `seed ${seed}`);
-      assert.deepEqual(validateDatabase(config, db), [], `seed ${seed}: original database was modified`);
+      assert.deepEqual(strictProblems(config, session.db), [], `seed ${seed}`);
+      assert.deepEqual(strictProblems(config, db), [], `seed ${seed}: original database was modified`);
     }
   });
 });

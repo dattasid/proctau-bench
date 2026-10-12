@@ -10,7 +10,7 @@ import type { Spec } from "./spec.ts";
 import type { BankConfig } from "../bank/schema.ts";
 import type { Database } from "../bank/state.ts";
 import { validateBank } from "../bank/validate.ts";
-import { validateDatabase } from "../bank/validate_db.ts";
+import { strictProblems } from "../bank/validate_db.ts";
 
 export interface Bank {
   seed: number;
@@ -27,6 +27,7 @@ export function generateBank(seed: number, spec: Spec = SPEC): { bank: Bank | nu
   if (configErrors.length > 0) return { bank: null, errors: configErrors };
   const db = sampleDatabase(createRng(seed, 1), config, spec);
   const docs = renderDocs(createRng(seed, 2), config);
-  const errors = [...validateDatabase(config, db), ...checkDocCoverage(config, docs)];
+  // Background history must follow every rule; only tasks plant mistakes.
+  const errors = [...strictProblems(config, db), ...checkDocCoverage(config, docs)];
   return { bank: errors.length === 0 ? { seed, config, db, docs } : null, errors };
 }

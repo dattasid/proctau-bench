@@ -17,7 +17,8 @@ import type { BankConfig, Product, Requirement } from "../bank/schema.ts";
 import { createSession } from "../env/session.ts";
 import type { TraceRecord } from "../env/session.ts";
 import type { Account, Customer, Database } from "../bank/state.ts";
-import { validateDatabase } from "../bank/validate_db.ts";
+import { auditDatabase, describeFinding } from "../bank/validate_db.ts";
+import type { Finding } from "../bank/validate_db.ts";
 import type { CustomerScript } from "../script/types.ts";
 
 export interface ExpectedCall {
@@ -35,6 +36,7 @@ export interface Task {
   intended: { rule: string; passed: boolean }[]; // the rule branch this task targets
   goldCalls: ExpectedCall[]; // one correct sequence; others may be equally valid
   forbiddenCalls?: ExpectedCall[]; // calls that break the targeted rule, replayed to confirm the task hits it
+  planted: Finding[]; // mistakes in the starting history put there on purpose (see validate_db.ts)
   goldHash: string; // database hash after a correct conversation
 }
 
@@ -82,9 +84,17 @@ function assertIntent(template: string, record: TraceRecord, intended: Task["int
   }
 }
 
-function assertValid(template: string, bank: Bank, db: Database): void {
-  const errors = validateDatabase(bank.config, db);
+// The fixture's bookkeeping is sound, and its history departs from the rules exactly where the
+// template planted a mistake: an unplanned finding is a generator bug, and a planted mistake the
+// audit does not find is no mistake at all.
+function assertValid(template: string, bank: Bank, db: Database, planted: Finding[] = []): void {
+  const { errors, findings } = auditDatabase(bank.config, db);
   if (errors.length > 0) throw new Error(`${template}: fixture breaks the database\n  ${errors.join("\n  ")}`);
+  const found = findings.map(describeFinding).sort();
+  const meant = planted.map(describeFinding).sort();
+  if (found.join("\n") !== meant.join("\n")) {
+    throw new Error(`${template}: findings differ from the planted mistakes\n  found: ${found.join("; ") || "none"}\n  planted: ${meant.join("; ") || "none"}`);
+  }
 }
 
 // Products an account-opening task can target: every product with requirements, or the top tier
@@ -263,6 +273,7 @@ const openAccountEligible: TaskTemplate = {
         },
         intended,
         goldCalls,
+        planted: [],
         goldHash: hashDatabase(db),
       };
     });
@@ -320,6 +331,7 @@ const openAccountTooNew: TaskTemplate = {
         intended,
         goldCalls,
         forbiddenCalls: [f.open],
+        planted: [],
         goldHash: hashDatabase(db),
       };
     });
