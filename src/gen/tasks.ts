@@ -89,7 +89,8 @@ function premiumSavingsFixture(rng: Rng, bank: Bank, ageDays: number) {
   const today = config.bank.simulatedDate;
   const db = structuredClone(bank.db);
   const customer = newCustomer(rng, db, today);
-  const deposit = config.products.savings_premium.minOpeningDeposit + rng.money(0, 3000, 500);
+  // Always positive: a $0 deposit is not a valid call, and the minimum can be $0 on unordered banks.
+  const deposit = config.products.savings_premium.minOpeningDeposit + rng.money(500, 3500, 500);
   const checking = addAccount(db, customer, "checking_basic", addDays(today, -ageDays), (deposit + rng.money(500, 5000, 100)) * 100);
   chargeMonthlyFees(config, db, checking, today);
   const verify = { tool: "verify_identity", args: { customerId: customer.id, dateOfBirth: customer.dateOfBirth, ssnLast4: customer.ssnLast4 } };

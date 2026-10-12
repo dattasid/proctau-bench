@@ -80,6 +80,10 @@ export interface BankConfig {
     name: string;
     simulatedDate: string; // ISO date, the executor's clock starts here
   };
+  // false: each tier dominates the one below (higher rates, deposits, fees and waiver balances).
+  // true: tiers are sampled independently, so a higher tier can be worse on any of these. It
+  // tests that the agent reads the numbers instead of assuming the usual order.
+  unorderedTiers: boolean;
   products: Record<ProductId, Product>;
   policies: Policies;
 }

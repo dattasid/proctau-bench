@@ -59,6 +59,10 @@ export const SPEC = {
     seniorMinAge: [62, 67, 1],
   },
 
+  // Banks whose tiers are sampled independently instead of stepping up (see
+  // BankConfig.unorderedTiers). Belongs in a profile once profiles exist.
+  unorderedTiersChance: 0.2,
+
   // Product tiers from lowest to highest. Each account type has one product per tier.
   tiers: ["basic", "premium"],
 

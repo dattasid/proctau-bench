@@ -38,7 +38,8 @@ export function validateBank(config: BankConfig): string[] {
   }
   if (errors.length > 0) return errors;
 
-  for (const accountType of ACCOUNT_TYPES) {
+  // Tier order: only for banks whose tiers are meant to step up.
+  for (const accountType of config.unorderedTiers ? [] : ACCOUNT_TYPES) {
     const basic = config.products[`${accountType}_basic`];
     const premium = config.products[`${accountType}_premium`];
     if (lowestApy(premium.interest) <= highestApy(basic.interest) && highestApy(premium.interest) > 0) {

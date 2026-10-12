@@ -108,10 +108,12 @@ function productSheet(config: BankConfig, p: Product, say: Say): Doc {
   const intro =
     p.tier === "basic"
       ? say(`${p.displayName} is our everyday ${kind} account.`, `${p.displayName} is ${config.bank.name}'s standard ${kind} account.`)
-      : say(
-          `${p.displayName} is our premium ${kind} account for customers who keep higher balances.`,
-          `${p.displayName} is ${config.bank.name}'s premium ${kind} account.`,
-        );
+      : config.unorderedTiers
+        ? `${p.displayName} is ${config.bank.name}'s premium ${kind} account.` // no claims about how it compares
+        : say(
+            `${p.displayName} is our premium ${kind} account for customers who keep higher balances.`,
+            `${p.displayName} is ${config.bank.name}'s premium ${kind} account.`,
+          );
   const opening =
     p.minOpeningDeposit > 0
       ? `The minimum opening deposit is ${money(p.minOpeningDeposit)}.`

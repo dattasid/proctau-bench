@@ -70,18 +70,28 @@ function tieredInterest(rng: Rng, base: number): Interest {
 
 // One product of any account type at any tier. `below` is the same account type's product one tier
 // down (null for the bottom tier); every value either comes from the account type's anchors or
-// steps up from `below`, which is what makes higher tiers dominate.
-function sampleProduct(rng: Rng, accountType: AccountType, position: number, below: Product | null, name: string): Product {
+// steps up from `below`, which is what makes higher tiers dominate. With `unordered`, every tier
+// is sampled as if it were the bottom one; only its id and name say which tier it is.
+function sampleProduct(
+  rng: Rng,
+  accountType: AccountType,
+  position: number,
+  below: Product | null,
+  name: string,
+  unordered: boolean,
+): Product {
   const spec: AccountTypeSpec = SPEC.accountTypes[accountType];
   const count = SPEC.tiers.length;
-  const rank = count > 1 ? position / (count - 1) : 0;
+  const level = unordered ? 0 : position; // the tier's place for sampling purposes
+  if (unordered) below = null;
+  const rank = count > 1 ? level / (count - 1) : 0;
   const chance = (o: Odds) => o.bottom + (o.top - o.bottom) * rank;
   const stepUp = (from: number | undefined, r: { anchor: Range; step: Range }) =>
     from === undefined ? rng.money(...r.anchor) : from + rng.money(...r.step);
 
   const minOpeningDeposit = stepUp(below?.minOpeningDeposit, spec.minOpeningDeposit);
   const feeAmount = rng.bool(chance(spec.fee.free)) ? 0 : stepUp(below?.monthlyFee.amount, spec.fee);
-  const minBalance = scaled(spec.waiver.minBalance, spec.waiver.minBalanceGrowth ** position);
+  const minBalance = scaled(spec.waiver.minBalance, spec.waiver.minBalanceGrowth ** level);
   const monthlyFee: MonthlyFee =
     feeAmount === 0 || !rng.bool(SPEC.monthlyFee.waivableChance)
       ? { amount: feeAmount, waiver: { logic: "any", conditions: [] } }
@@ -114,14 +124,14 @@ function sampleProduct(rng: Rng, accountType: AccountType, position: number, bel
   };
 }
 
-function sampleProducts(rng: Rng): BankConfig["products"] {
+function sampleProducts(rng: Rng, unordered: boolean): BankConfig["products"] {
   const scheme = rng.pick(SPEC.bank.nameSchemes);
   const names = SPEC.tiers.map((_, i) => rng.pick(scheme[i]!));
   const products: Partial<BankConfig["products"]> = {};
   for (const accountType of ACCOUNT_TYPES) {
     let below: Product | null = null;
     SPEC.tiers.forEach((_, position) => {
-      const p = sampleProduct(rng, accountType, position, below, names[position]!);
+      const p = sampleProduct(rng, accountType, position, below, names[position]!, unordered);
       products[p.id] = p;
       below = p;
     });
@@ -144,6 +154,7 @@ function samplePolicies(rng: Rng): Policies {
 }
 
 export function sampleBank(rng: Rng, seed: number): BankConfig {
+  const unorderedTiers = rng.bool(SPEC.unorderedTiersChance);
   return {
     schemaVersion: 1,
     seed,
@@ -151,7 +162,8 @@ export function sampleBank(rng: Rng, seed: number): BankConfig {
       name: `${rng.pick(SPEC.bank.prefixes)} ${rng.pick(SPEC.bank.suffixes)}`,
       simulatedDate: simulatedDate(rng),
     },
-    products: sampleProducts(rng),
+    unorderedTiers,
+    products: sampleProducts(rng, unorderedTiers),
     policies: samplePolicies(rng),
   };
 }

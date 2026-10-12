@@ -67,7 +67,7 @@ describe("REST server", () => {
       const r = await env.call("open_account", {
         customerId,
         productId: "savings_premium",
-        initialDeposit: bank!.config.products.savings_premium.minOpeningDeposit,
+        initialDeposit: Math.max(bank!.config.products.savings_premium.minOpeningDeposit, 100),
         fundingAccountId: checking.id,
       });
       const { hash } = await env.state();
