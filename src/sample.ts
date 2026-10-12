@@ -163,7 +163,7 @@ function samplePolicies(rng: Rng): Policies {
     premiumSavingsEligibility: {
       requiresChecking,
       minCheckingAgeDays: requiresChecking ? rng.pick([0, 14, 30, 60, 90]) : 0,
-      enforcement: rng.pick(["api", "agent"] as const),
+      enforcement: "agent", // "api" only for RL with weak agents, see Enforcement
     },
   };
 }

@@ -73,13 +73,9 @@ describe("REST server", () => {
       const { hash } = await env.state();
       const e = evaluate(task, (await env.trace()).trace, hash, "user_stop");
       assert.equal(e.pass, false);
-      if (bank!.config.policies.premiumSavingsEligibility.enforcement === "api") {
-        assert.equal(r.outcome, "blocked");
-        assert.equal(e.blockedAttempts[0]?.rule, "premium_savings.eligibility");
-      } else {
-        assert.equal(r.outcome, "executed");
-        assert.equal(e.violations[0]?.rule, "premium_savings.eligibility");
-      }
+      assert.equal(r.outcome, "executed");
+      assert.equal(e.dbMatch, false);
+      assert.equal(e.violations[0]?.rule, "premium_savings.eligibility");
       await env.close();
     }
   });

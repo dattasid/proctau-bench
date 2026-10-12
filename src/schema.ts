@@ -55,6 +55,8 @@ export interface Product {
 
 // Where a rule is enforced: "api" blocks the call with a vague error,
 // "agent" lets the call through and only the trace records the violation.
+// Benchmarks use "agent" only. "api" is kept for RL with weak agents, where blocking keeps
+// episodes from going off the rails; it is never sampled for the benchmark.
 export type Enforcement = "api" | "agent";
 
 export interface Policies {

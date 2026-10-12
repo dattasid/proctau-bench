@@ -21,7 +21,7 @@ function setup(policies: Partial<BankConfig["policies"]> = {}, checkingAgeDays =
   config.policies = {
     ...config.policies,
     identityVerification: "once_per_session",
-    premiumSavingsEligibility: { requiresChecking: true, minCheckingAgeDays: 30, enforcement: "api" },
+    premiumSavingsEligibility: { requiresChecking: true, minCheckingAgeDays: 30, enforcement: "agent" },
     feeReversal: { maxPerYear: 1 },
     ...policies,
   };
@@ -33,6 +33,7 @@ function setup(policies: Partial<BankConfig["policies"]> = {}, checkingAgeDays =
 }
 
 const verify = (s: Session, customerId: string) => callTool(s, "verify_identity", { customerId, dateOfBirth: DOB, ssnLast4: SSN });
+const failed = (r: { checks: { rule: string; passed: boolean }[] }) => r.checks.filter((c) => !c.passed).map((c) => c.rule);
 
 function openPremiumSavings(s: Session, customerId: string, fundingAccountId: string) {
   const deposit = s.config.products.savings_premium.minOpeningDeposit;
@@ -61,20 +62,20 @@ describe("shape", () => {
 });
 
 describe("identity", () => {
-  it("blocks reads until the customer is verified", () => {
+  it("lets reads through before verification but records the violation", () => {
     const { session, customer } = setup();
     const before = callTool(session, "list_accounts", { customerId: customer.id });
-    assert.equal(before.outcome, "blocked");
-    assert.deepEqual(before.result, { error: DECLINED });
+    assert.equal(before.outcome, "executed");
+    assert.deepEqual(failed(before), ["identity.verified"]);
     assert.deepEqual(verify(session, customer.id).result, { verified: true });
-    assert.equal(callTool(session, "list_accounts", { customerId: customer.id }).outcome, "executed");
+    assert.deepEqual(failed(callTool(session, "list_accounts", { customerId: customer.id })), []);
   });
 
   it("does not verify with a wrong date of birth", () => {
     const { session, customer, checking } = setup();
     const r = callTool(session, "verify_identity", { customerId: customer.id, dateOfBirth: "1988-03-15", ssnLast4: SSN });
     assert.deepEqual(r.result, { verified: false });
-    assert.equal(openPremiumSavings(session, customer.id, checking.id).outcome, "blocked");
+    assert.deepEqual(failed(openPremiumSavings(session, customer.id, checking.id)), ["identity.verified"]);
   });
 
   it("needs a fresh verification before every write under that policy", () => {
@@ -82,11 +83,11 @@ describe("identity", () => {
     const savings = addAccount(session.db, customer, "savings_basic", checking.openedOn, 0);
     verify(session, customer.id);
     const move = () => callTool(session, "transfer_funds", { fromAccountId: checking.id, toAccountId: savings.id, amount: 100 });
-    assert.equal(move().outcome, "executed");
-    assert.equal(move().outcome, "blocked");
-    assert.equal(callTool(session, "list_accounts", { customerId: customer.id }).outcome, "executed");
+    assert.deepEqual(failed(move()), []);
+    assert.deepEqual(failed(move()), ["identity.verified"]);
+    assert.deepEqual(failed(callTool(session, "list_accounts", { customerId: customer.id })), []);
     verify(session, customer.id);
-    assert.equal(move().outcome, "executed");
+    assert.deepEqual(failed(move()), []);
   });
 });
 
@@ -99,20 +100,22 @@ describe("premium savings eligibility", () => {
     assert.ok(r.checks.every((c) => c.passed));
   });
 
+  // "api" enforcement is only for RL with weak agents; the benchmark never samples it.
   it("blocks a too-young checking account when the API enforces the rule", () => {
-    const { session, customer, checking } = setup({}, 20);
+    const { session, customer, checking } = setup(
+      { premiumSavingsEligibility: { requiresChecking: true, minCheckingAgeDays: 30, enforcement: "api" } },
+      20,
+    );
     verify(session, customer.id);
     const r = openPremiumSavings(session, customer.id, checking.id);
     assert.equal(r.outcome, "blocked");
+    assert.deepEqual(r.result, { error: DECLINED });
     assert.equal(r.changes.length, 0);
     assert.equal(Object.keys(session.db.accounts).length, 1);
   });
 
   it("lets the call through but records the violation when the agent must enforce it", () => {
-    const { session, customer, checking } = setup(
-      { premiumSavingsEligibility: { requiresChecking: true, minCheckingAgeDays: 30, enforcement: "agent" } },
-      20,
-    );
+    const { session, customer, checking } = setup({}, 20);
     verify(session, customer.id);
     const r = openPremiumSavings(session, customer.id, checking.id);
     assert.equal(r.outcome, "executed");
@@ -123,12 +126,13 @@ describe("premium savings eligibility", () => {
 });
 
 describe("opening and transfers", () => {
-  it("blocks a deposit below the product minimum", () => {
+  it("records a deposit below the product minimum as a violation", () => {
     const { session, customer, checking, config } = setup();
     verify(session, customer.id);
     const min = config.products.checking_premium.minOpeningDeposit;
     const r = callTool(session, "open_account", { customerId: customer.id, productId: "checking_premium", initialDeposit: min - 1, fundingAccountId: checking.id });
-    assert.equal(r.outcome, "blocked");
+    assert.equal(r.outcome, "executed");
+    assert.deepEqual(failed(r), ["opening.min_deposit"]);
   });
 
   it("fails a transfer without enough funds as a system error", () => {

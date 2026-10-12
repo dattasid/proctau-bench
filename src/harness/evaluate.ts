@@ -11,6 +11,7 @@ export interface Evaluation {
   // Policy rules broken by calls that executed anyway (agent-enforced rules).
   violations: { index: number; tool: string; rule: string }[];
   // Policy rules the API blocked: attempted violations that changed nothing.
+  // Only possible under "api" enforcement (RL with weak agents); always empty in benchmarks.
   blockedAttempts: { index: number; tool: string; rule: string }[];
   counts: { calls: number; invalid: number; error: number; blocked: number; executed: number };
   endReason: EndReason;

@@ -38,9 +38,10 @@ export interface Tool {
 }
 
 // Policy rules with a fixed enforcement. premium_savings.eligibility comes from the config.
+// Benchmark setting: every rule is "agent", as in tau2. "api" is only meant for RL with weak agents.
 export const FIXED_ENFORCEMENT = {
-  "identity.verified": "api",
-  "opening.min_deposit": "api",
+  "identity.verified": "agent",
+  "opening.min_deposit": "agent",
   "refund.correction_valid": "agent",
   "refund.courtesy_cap": "agent",
 } as const;
