@@ -2,13 +2,22 @@
 // shape check, system and policy checks, the enforcement decision, and the database change.
 
 import type { Enforcement } from "../bank/schema.ts";
-import { diffDatabases } from "./session.ts";
-import type { Check, Outcome, Session, TraceRecord } from "./session.ts";
-import { FIXED_ENFORCEMENT, TOOLS } from "../bankapi/tools.ts";
+import { TOOLS } from "../bankapi/tools.ts";
 import type { Args, Param, Tool } from "../bankapi/tools.ts";
+import { diffDatabases } from "./session.ts";
+import type { Outcome, RecordedCheck, Session, TraceRecord } from "./session.ts";
 
 // Policy blocks are deliberately vague: the API does not explain the rule.
 export const DECLINED = "This request was declined.";
+
+// Policy rules with a fixed enforcement. premium_savings.eligibility comes from the config.
+// Benchmark setting: every rule is "agent", as in tau2. "api" is only meant for RL with weak agents.
+export const FIXED_ENFORCEMENT = {
+  "identity.verified": "agent",
+  "opening.min_deposit": "agent",
+  "refund.correction_valid": "agent",
+  "refund.courtesy_cap": "agent",
+} as const;
 
 const byName = new Map(TOOLS.map((t) => [t.name, t]));
 
@@ -56,12 +65,12 @@ export function callTool(s: Session, name: string, args: unknown): TraceRecord {
   const shape = shapeErrors(tool, args);
   if (shape.length > 0) return finish({ shapeErrors: shape, checks: [], outcome: "invalid", result: { error: shape.join("; ") }, changes: [] });
   if (s.ended) {
-    const check: Check = { rule: "session.open", kind: "system", passed: false, detail: "The conversation was transferred to a human agent." };
+    const check: RecordedCheck = { rule: "session.open", kind: "system", passed: false, detail: "The conversation was transferred to a human agent." };
     return finish({ shapeErrors: [], checks: [check], outcome: "error", result: { error: check.detail }, changes: [] });
   }
 
   const plan = tool.plan(s, args as Args);
-  const checks = plan.checks.map((c) => (c.kind === "policy" ? { ...c, enforcement: enforcementOf(s, c.rule) } : c));
+  const checks: RecordedCheck[] = plan.checks.map((c) => (c.kind === "policy" ? { ...c, enforcement: enforcementOf(s, c.rule) } : c));
   const systemFailure = checks.find((c) => c.kind === "system" && !c.passed);
   const blocking = checks.some((c) => c.kind === "policy" && !c.passed && c.enforcement === "api");
 

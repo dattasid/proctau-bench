@@ -2,8 +2,8 @@
 // task fixture builder. Each helper writes records consistent with the shared rules.
 
 import { addMonths, monthOf, monthStart } from "../util/dates.ts";
+import { postTransaction } from "../bank/ledger.ts";
 import { monthlyFeeDue } from "../bank/rules.ts";
-import { postTransaction } from "../env/session.ts";
 import type { BankConfig, ProductId } from "../bank/schema.ts";
 import { nextId } from "../bank/state.ts";
 import type { Account, Customer, Database, Transaction, TransactionKind } from "../bank/state.ts";

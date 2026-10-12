@@ -7,12 +7,21 @@ import {
   evaluateWaiver,
   premiumSavingsEligible,
 } from "../bank/rules.ts";
+import { postTransaction, transfer } from "../bank/ledger.ts";
 import { PRODUCT_IDS } from "../bank/schema.ts";
 import type { ProductId } from "../bank/schema.ts";
-import { postTransaction, transfer } from "../env/session.ts";
-import type { Check, Session } from "../env/session.ts";
 import { nextId } from "../bank/state.ts";
 import type { Account, Transaction } from "../bank/state.ts";
+import type { BankSession } from "./session.ts";
+
+export interface Check {
+  rule: string;
+  // system: the operation is impossible (unknown id, insufficient funds) and always fails the call.
+  // policy: a bank rule, blocked or let through according to its enforcement.
+  kind: "system" | "policy";
+  passed: boolean;
+  detail: string;
+}
 
 export interface Param {
   type: "string" | "number";
@@ -34,17 +43,8 @@ export interface Tool {
   description: string;
   params: Record<string, Param>;
   write: boolean; // changes the database; consumes verification under before_every_write
-  plan: (s: Session, args: Args) => Plan;
+  plan: (s: BankSession, args: Args) => Plan;
 }
-
-// Policy rules with a fixed enforcement. premium_savings.eligibility comes from the config.
-// Benchmark setting: every rule is "agent", as in tau2. "api" is only meant for RL with weak agents.
-export const FIXED_ENFORCEMENT = {
-  "identity.verified": "agent",
-  "opening.min_deposit": "agent",
-  "refund.correction_valid": "agent",
-  "refund.courtesy_cap": "agent",
-} as const;
 
 const dollars = (cents: number): number => cents / 100;
 const cents = (amount: number): number => Math.round(amount * 100);
@@ -54,7 +54,7 @@ const num = (args: Args, key: string): number => args[key] as number;
 const system = (rule: string, passed: boolean, detail: string): Check => ({ rule, kind: "system", passed, detail });
 const policy = (rule: string, passed: boolean, detail: string): Check => ({ rule, kind: "policy", passed, detail });
 
-function identity(s: Session, customerId: string | undefined, write: boolean): Check {
+function identity(s: BankSession, customerId: string | undefined, write: boolean): Check {
   const v = s.verified;
   const perWrite = s.config.policies.identityVerification === "before_every_write";
   if (!v || v.customerId !== customerId) return policy("identity.verified", false, "customer not verified in this session");
@@ -62,7 +62,7 @@ function identity(s: Session, customerId: string | undefined, write: boolean): C
   return policy("identity.verified", true, "verified");
 }
 
-function accountCheck(s: Session, rule: string, id: string): { check: Check; account?: Account } {
+function accountCheck(s: BankSession, rule: string, id: string): { check: Check; account?: Account } {
   const account = s.db.accounts[id];
   if (!account) return { check: system(rule, false, `No account with id ${id}.`) };
   if (account.status !== "open") return { check: system(rule, false, `Account ${id} is closed.`), account };
@@ -71,7 +71,7 @@ function accountCheck(s: Session, rule: string, id: string): { check: Check; acc
 
 const nothing = (checks: Check[]): Plan => ({ checks, apply: () => null });
 
-function describeAccount(s: Session, a: Account) {
+function describeAccount(s: BankSession, a: Account) {
   return {
     accountId: a.id,
     product: s.config.products[a.productId].displayName,
