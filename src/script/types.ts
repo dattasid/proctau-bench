@@ -26,6 +26,7 @@ export const TRIGGERS = [
   "closing", // the agent says goodbye
   "done", // the agent reports the goal action done
   "date_given", // the agent gives the date from which the customer can open the product
+  "verification_failed", // the agent says the identity details did not match
   "refused", // the agent says no: not eligible, the fee was valid, or the goal action was not done
   "transfer_offered", // the agent offers to hand over to a human
   "confirm_mismatch", // the agent asks to confirm an action that differs from the goal
@@ -46,6 +47,7 @@ export type Reply =
   | "ask_why"
   | "ask_when_eligible"
   | "insist"
+  | "correct_identity"
   | "acknowledge"
   | "thank_and_end"
   | "end";
@@ -60,6 +62,8 @@ export type CustomerAct =
   | { act: "ask_why" }
   | { act: "ask_when_eligible" }
   | { act: "insist" }
+  | { act: "correct_info"; field: InfoField; value: string | number }
+  | { act: "repeat_info" }
   | { act: "acknowledge" }
   | { act: "thank_and_end" };
 
@@ -67,6 +71,8 @@ export interface CustomerScript {
   name: string;
   // Details the customer can give when asked. Anything else, they don't have.
   knows: Partial<Record<InfoField, string | number>>;
+  // Details the customer gets wrong the first time they give them, then corrects.
+  wrongFirst?: Partial<Record<InfoField, string | number>>;
   goal: Goal;
   // This task's own reactions; the shared table (engine.ts) covers every other trigger. The nth time
   // a trigger fires, the nth reply is used; the last one repeats.

@@ -13,6 +13,7 @@ export const SHARED_REACTIONS: Record<Trigger, Reply[]> = {
   closing: ["end"],
   done: ["thank_and_end"],
   date_given: ["thank_and_end"],
+  verification_failed: ["correct_identity"],
   refused: ["ask_why", "thank_and_end"],
   transfer_offered: ["confirm"],
   confirm_mismatch: ["correct"],
@@ -25,9 +26,16 @@ export const SHARED_REACTIONS: Record<Trigger, Reply[]> = {
 
 export interface EngineState {
   fired: Partial<Record<Trigger, number>>; // how many times each trigger has been answered
+  given: Partial<Record<InfoField, number>>; // how many times each detail has been given
 }
 
-export const newState = (): EngineState => ({ fired: {} });
+export const newState = (): EngineState => ({ fired: {}, given: {} });
+
+// The value the customer gives for a detail: the wrong one the first time, if their script says so.
+function valueFor(script: CustomerScript, state: EngineState, field: InfoField): string | number | undefined {
+  const wrong = script.wrongFirst?.[field];
+  return wrong !== undefined && !state.given[field] ? wrong : script.knows[field];
+}
 
 export type EndReason = "user_stop" | "agent_ended" | "off_script";
 
@@ -74,6 +82,9 @@ function triggersOf(script: CustomerScript, acts: Act[]): Set<Trigger> {
       case "closing":
         found.add("closing");
         break;
+      case "report_verification":
+        if (a.args.passed === false) found.add("verification_failed");
+        break;
       case "offer_transfer":
         found.add("transfer_offered");
         break;
@@ -117,6 +128,7 @@ function replyAct(reply: Reply, script: CustomerScript, acts: Act[]): CustomerAc
     case "decline":
       return { act: "decline", goal: script.goal };
     case "end":
+    case "correct_identity": // handled in step, which knows what was given
       return null;
     default:
       return { act: reply };
@@ -134,9 +146,10 @@ export function step(script: CustomerScript, state: EngineState, acts: Act[]): S
   const info: CustomerAct[] = [];
   for (const a of known.filter((x) => x.act === "request_info")) {
     const field = a.args.field as InfoField;
-    const value = script.knows[field];
     if (info.some((i) => "field" in i && i.field === field)) continue;
+    const value = valueFor(script, state, field);
     info.push(value === undefined ? { act: "dont_have", field } : { act: "give_info", field, value });
+    state.given[field] = (state.given[field] ?? 0) + 1;
   }
 
   // Then react to the most important situation in the turn.
@@ -150,6 +163,17 @@ export function step(script: CustomerScript, state: EngineState, acts: Act[]): S
   state.fired[trigger] = n + 1;
   const reply = replies[Math.min(n, replies.length - 1)]!;
   if (reply === "end") return { acts: [], end: "agent_ended", trigger, flags };
+  if (reply === "correct_identity") {
+    // Correct every detail given wrong so far, unless this turn already gives it again.
+    const fix: CustomerAct[] = [];
+    for (const [field, wrong] of Object.entries(script.wrongFirst ?? {}) as [InfoField, string | number][]) {
+      if (!state.given[field] || info.some((i) => "field" in i && i.field === field) || wrong === script.knows[field]) continue;
+      fix.push({ act: "correct_info", field, value: script.knows[field]! });
+      state.given[field] = state.given[field]! + 1;
+    }
+    const acts = [...info, ...(fix.length > 0 || info.length > 0 ? fix : [{ act: "repeat_info" } as const])];
+    return { acts, end: null, trigger, flags };
+  }
   const main = replyAct(reply, script, known);
   // Information answers already reply to a turn that only states things.
   const out = trigger === "statement" && info.length > 0 ? info : [...info, ...(main ? [main] : [])];

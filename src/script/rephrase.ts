@@ -66,6 +66,10 @@ function sentence(a: CustomerAct): string {
       return "When will I be able to open it?";
     case "insist":
       return "I'd really like this refunded. Is there anything you can do?";
+    case "correct_info":
+      return `I'm sorry, I gave you the wrong ${FIELD_NAMES[a.field]}. It's ${spoken(a.field, a.value)}.`;
+    case "repeat_info":
+      return "I'm quite sure the details I gave are right.";
     case "acknowledge":
       return "Okay.";
     case "thank_and_end":
@@ -86,6 +90,7 @@ export function requiredValues(acts: CustomerAct[]): string[] {
       case "give_info":
         return [spoken(a.field, a.value)];
       case "correct":
+      case "correct_info":
         return [spoken(a.field, a.value)];
       case "decline":
         return a.goal.action === "open_account" ? [a.goal.product] : [];

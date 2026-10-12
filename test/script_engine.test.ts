@@ -116,6 +116,27 @@ describe("script engine", () => {
     assert.equal(done.end, "user_stop");
   });
 
+  it("gives a wrong detail first, then corrects it when verification fails or when asked again", () => {
+    const slip: CustomerScript = { ...eligible, wrongFirst: { date_of_birth: "1981-02-03" } };
+    const state = newState();
+    const first = step(slip, state, [act("request_info", { field: "full_name" }), act("request_info", { field: "date_of_birth" })]);
+    assert.deepEqual(first.acts, [
+      { act: "give_info", field: "full_name", value: "Ada Quinn" },
+      { act: "give_info", field: "date_of_birth", value: "1981-02-03" },
+    ]);
+    const failed = step(slip, state, [act("report_verification", { subject: "identity", passed: false })]);
+    assert.deepEqual(failed.acts, [{ act: "correct_info", field: "date_of_birth", value: "1980-02-03" }]);
+    // Asked again later, the right value.
+    assert.deepEqual(step(slip, state, [act("request_info", { field: "date_of_birth" })]).acts, [
+      { act: "give_info", field: "date_of_birth", value: "1980-02-03" },
+    ]);
+    // Asked again straight after the failure, the turn's answer is already the correction.
+    const other = newState();
+    step(slip, other, [act("request_info", { field: "date_of_birth" })]);
+    const again = step(slip, other, [act("report_verification", { subject: "identity", passed: false }), act("request_info", { field: "date_of_birth" })]);
+    assert.deepEqual(again.acts, [{ act: "give_info", field: "date_of_birth", value: "1980-02-03" }]);
+  });
+
   it("waits while the agent says it is transferring, accepts an offered transfer, ends on goodbye", () => {
     const t = step(eligible, newState(), [act("transfer_to_human")]);
     assert.deepEqual(names(t), ["acknowledge"]);

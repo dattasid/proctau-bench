@@ -575,13 +575,51 @@ const feeValidCapReached: TaskTemplate = {
 
 export const TEMPLATES: TaskTemplate[] = [openAccountEligible, openAccountTooNew, feeChargedInError, feeValidCourtesy, feeValidCapReached];
 
+// ---- Modifiers: changes any task can carry on top of its template.
+
+// A plausible slip: the year off by one or two, or one digit of the last four changed.
+function slip(rng: Rng, field: "date_of_birth" | "ssn_last4", value: string): string {
+  if (field === "date_of_birth") return addDays(value, rng.pick([-730, -365, 365, 730]));
+  const i = rng.int(0, 3);
+  const digit = (Number(value[i]) + rng.int(1, 9)) % 10;
+  return value.slice(0, i) + digit + value.slice(i + 1);
+}
+
+// The customer gives one identity detail wrong the first time and corrects it when told the details
+// don't match, or when asked again. Verifying with the wrong detail fails, so acting on the
+// account before verifying again is the mistake this adds to any task.
+function withWrongIdentity(rng: Rng, task: Task): Task {
+  const field = rng.pick(["date_of_birth", "ssn_last4"] as const);
+  const right = String(task.script.knows[field]);
+  const wrong = slip(rng, field, right);
+  const spoken = (v: string) => (field === "date_of_birth" ? longDate(v) : v);
+  const label = field === "date_of_birth" ? "date of birth" : "last four digits of your Social Security number";
+  return {
+    ...task,
+    user: {
+      instructions:
+        `${task.user.instructions} The first time you are asked for your ${label}, give ${spoken(wrong)} by mistake. If ` +
+        `the agent says your details don't match, or asks again, apologize and give the correct one, ${spoken(right)}.`,
+    },
+    script: { ...task.script, wrongFirst: { [field]: wrong } },
+  };
+}
+
+export interface BuildOptions {
+  wrongIdentityRate?: number; // share of tasks whose customer gives one identity detail wrong first (default 0.25)
+}
+
 // Every applicable template for one bank, each with its own rng stream. A `variant` above 0 draws
 // each template again from another stream: a different target and customer, and an id ending in
-// `:<variant>`.
-export function buildTasks(bank: Bank, variant = 0): Task[] {
+// `:<variant>`. Modifiers are drawn from a stream of their own, so they never change the fixture.
+export function buildTasks(bank: Bank, variant = 0, options: BuildOptions = {}): Task[] {
+  const rate = options.wrongIdentityRate ?? 0.25;
   return TEMPLATES.flatMap((t, i) => {
     if (!t.applies(bank.config)) return [];
-    const task = t.build(createRng(bank.seed, 100 + i + 1000 * variant), bank);
-    return [variant > 0 ? { ...task, id: `${task.id}:${variant}` } : task];
+    let task = t.build(createRng(bank.seed, 100 + i + 1000 * variant), bank);
+    if (variant > 0) task = { ...task, id: `${task.id}:${variant}` };
+    const modifiers = createRng(bank.seed, 500 + i + 1000 * variant);
+    if (modifiers.bool(rate)) task = withWrongIdentity(modifiers, task);
+    return [task];
   });
 }

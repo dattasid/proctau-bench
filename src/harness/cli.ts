@@ -1,6 +1,7 @@
 // Usage: npm run harness -- [--seed N] [--count K] [--template ID] [--tasks-per-bank T]
 //          [--agent-model M] [--user-model M] [--server URL] [--out DIR]
-//          [--customer llm|scripted] [--extract-samples N]
+//          [--customer llm|scripted] [--extract-samples N] [--wrong-identity-rate R]
+// --wrong-identity-rate: share of tasks whose customer gives one identity detail wrong first (default 0.25).
 // --tasks-per-bank: draw more task variants until each bank has T tasks (default: one per template).
 // --template: one or more template ids, comma-separated; * matches anything (e.g. fee_*,open_account_eligible).
 //   npm run harness -- --list-templates prints them.
@@ -29,6 +30,7 @@ const { values } = parseArgs({
     "tasks-per-bank": { type: "string" },
     customer: { type: "string", default: "llm" },
     "extract-samples": { type: "string", default: "1" },
+    "wrong-identity-rate": { type: "string" },
     "agent-model": { type: "string", default: DEFAULT_MODEL },
     "user-model": { type: "string", default: DEFAULT_MODEL },
     server: { type: "string" },
@@ -82,8 +84,9 @@ try {
     }
     const wanted = values["tasks-per-bank"] ? Number(values["tasks-per-bank"]) : 0;
     const keep = (t: { template: string }) => !templateFilter || templateFilter.some((re) => re.test(t.template));
-    let tasks = buildTasks(bank).filter(keep);
-    for (let variant = 1; tasks.length > 0 && tasks.length < wanted; variant++) tasks.push(...buildTasks(bank, variant).filter(keep));
+    const options = values["wrong-identity-rate"] ? { wrongIdentityRate: Number(values["wrong-identity-rate"]) } : {};
+    let tasks = buildTasks(bank, 0, options).filter(keep);
+    for (let variant = 1; tasks.length > 0 && tasks.length < wanted; variant++) tasks.push(...buildTasks(bank, variant, options).filter(keep));
     if (wanted > 0) tasks = tasks.slice(0, wanted);
     const { config, docs } = bank;
     writeJson(join(runDir, "banks", `${seed}.json`), { seed, config, docs, agentPrompt: agentSystemPrompt(config, docs) });
