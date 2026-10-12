@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DECLINED, callTool, toolList } from "../src/executor.ts";
-import { addAccount, addCustomer, addTransaction, emptyDatabase } from "../src/fixtures.ts";
-import { addDays } from "../src/dates.ts";
-import { createRng } from "../src/rng.ts";
-import { sampleBank } from "../src/sample.ts";
-import { sampleDatabase } from "../src/sample_db.ts";
-import type { BankConfig } from "../src/schema.ts";
-import { createSession } from "../src/session.ts";
-import type { Session } from "../src/session.ts";
-import { validateDatabase } from "../src/validate_db.ts";
+import { DECLINED, callTool, toolList } from "../src/env/executor.ts";
+import { addAccount, addCustomer, addTransaction, emptyDatabase } from "../src/gen/fixtures.ts";
+import { addDays } from "../src/util/dates.ts";
+import { createRng } from "../src/util/rng.ts";
+import { sampleBank } from "../src/gen/sample.ts";
+import { sampleDatabase } from "../src/gen/sample_db.ts";
+import type { BankConfig } from "../src/bank/schema.ts";
+import { createSession } from "../src/env/session.ts";
+import type { Session } from "../src/env/session.ts";
+import { validateDatabase } from "../src/bank/validate_db.ts";
 
 const DOB = "1988-03-14";
 const SSN = "4821";

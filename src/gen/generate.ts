@@ -2,13 +2,13 @@
 
 import { checkDocCoverage, renderDocs } from "./docs.ts";
 import type { Doc } from "./docs.ts";
-import { createRng } from "./rng.ts";
+import { createRng } from "../util/rng.ts";
 import { sampleBank } from "./sample.ts";
 import { sampleDatabase } from "./sample_db.ts";
-import type { BankConfig } from "./schema.ts";
-import type { Database } from "./state.ts";
-import { validateBank } from "./validate.ts";
-import { validateDatabase } from "./validate_db.ts";
+import type { BankConfig } from "../bank/schema.ts";
+import type { Database } from "../bank/state.ts";
+import { validateBank } from "../bank/validate.ts";
+import { validateDatabase } from "../bank/validate_db.ts";
 
 export interface Bank {
   seed: number;

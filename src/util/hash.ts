@@ -2,7 +2,7 @@
 // the same content always compare equal regardless of key insertion order.
 
 import { createHash } from "node:crypto";
-import type { Database } from "./state.ts";
+import type { Database } from "../bank/state.ts";
 
 export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;

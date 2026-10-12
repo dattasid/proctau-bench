@@ -1,8 +1,8 @@
 // Default evaluation: separate, named components read from the trace. Trainers are
 // expected to weight these themselves; `pass` is only a convenience for the POC.
 
-import type { TraceRecord } from "../session.ts";
-import type { Task } from "../tasks.ts";
+import type { TraceRecord } from "../env/session.ts";
+import type { Task } from "../gen/tasks.ts";
 
 export type EndReason = "user_stop" | "user_transfer" | "out_of_scope" | "agent_transfer" | "max_turns" | "tool_limit";
 

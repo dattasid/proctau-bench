@@ -4,13 +4,13 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { generateBank } from "../src/bank.ts";
-import { callTool } from "../src/executor.ts";
+import { generateBank } from "../src/gen/generate.ts";
+import { callTool } from "../src/env/executor.ts";
 import { evaluate } from "../src/harness/evaluate.ts";
 import type { RunResult } from "../src/harness/run.ts";
-import { hashDatabase } from "../src/hash.ts";
-import { createSession } from "../src/session.ts";
-import { buildTasks } from "../src/tasks.ts";
+import { hashDatabase } from "../src/util/hash.ts";
+import { createSession } from "../src/env/session.ts";
+import { buildTasks } from "../src/gen/tasks.ts";
 import { createViewerServer } from "../src/viewer/server.ts";
 import type { Batch } from "../src/viewer/server.ts";
 

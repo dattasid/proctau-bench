@@ -1,6 +1,6 @@
 // Database coherence checks, re-deriving every fee and limit from the shared rules.
 
-import { addMonths, ageOn, monthOf, monthStart } from "./dates.ts";
+import { addMonths, ageOn, monthOf, monthStart } from "../util/dates.ts";
 import { courtesyReversalsInYear, endOfDayBalances, monthlyFeeDue, premiumSavingsEligible } from "./rules.ts";
 import { PRODUCT_IDS } from "./schema.ts";
 import type { BankConfig } from "./schema.ts";

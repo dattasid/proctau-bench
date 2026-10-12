@@ -3,19 +3,19 @@
 // executor to confirm the branch and record the gold end state. A template that
 // misses its intended verdict throws instead of producing a silently wrong task.
 
-import type { Bank } from "./bank.ts";
-import { addDays } from "./dates.ts";
-import { callTool } from "./executor.ts";
+import type { Bank } from "./generate.ts";
+import { addDays } from "../util/dates.ts";
+import { callTool } from "../env/executor.ts";
 import { addAccount, addCustomer, chargeMonthlyFees } from "./fixtures.ts";
-import { longDate, money } from "./format.ts";
-import { hashDatabase } from "./hash.ts";
-import { createRng } from "./rng.ts";
-import type { Rng } from "./rng.ts";
-import type { BankConfig } from "./schema.ts";
-import { createSession } from "./session.ts";
-import type { TraceRecord } from "./session.ts";
-import type { Customer, Database } from "./state.ts";
-import { validateDatabase } from "./validate_db.ts";
+import { longDate, money } from "../util/format.ts";
+import { hashDatabase } from "../util/hash.ts";
+import { createRng } from "../util/rng.ts";
+import type { Rng } from "../util/rng.ts";
+import type { BankConfig } from "../bank/schema.ts";
+import { createSession } from "../env/session.ts";
+import type { TraceRecord } from "../env/session.ts";
+import type { Customer, Database } from "../bank/state.ts";
+import { validateDatabase } from "../bank/validate_db.ts";
 
 export interface ExpectedCall {
   tool: string;

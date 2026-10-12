@@ -10,7 +10,7 @@ import { createServer } from "node:http";
 import type { Server, ServerResponse } from "node:http";
 import { join, relative, resolve, sep } from "node:path";
 import type { RunResult } from "../harness/run.ts";
-import type { Task } from "../tasks.ts";
+import type { Task } from "../gen/tasks.ts";
 
 const PAGE = new URL("./page.html", import.meta.url);
 const RUN_FILE = /^[\w.-]+\.json$/;

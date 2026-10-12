@@ -2,11 +2,11 @@
 // every monthly fee in the history is exactly what the rules say. Task fixtures
 // will add their own customers on top. Interest is not posted yet.
 
-import { addDays, addMonths, daysBetween, monthOf, monthStart } from "./dates.ts";
-import type { Rng } from "./rng.ts";
-import { courtesyReversalsInYear, monthlyFeeDue } from "./rules.ts";
-import type { BankConfig, ProductId } from "./schema.ts";
-import type { Account, Customer, Database, Transaction, TransactionKind } from "./state.ts";
+import { addDays, addMonths, daysBetween, monthOf, monthStart } from "../util/dates.ts";
+import type { Rng } from "../util/rng.ts";
+import { courtesyReversalsInYear, monthlyFeeDue } from "../bank/rules.ts";
+import type { BankConfig, ProductId } from "../bank/schema.ts";
+import type { Account, Customer, Database, Transaction, TransactionKind } from "../bank/state.ts";
 
 const FIRST_NAMES = [
   "Maria", "James", "Aisha", "Daniel", "Priya", "Thomas", "Elena", "Kwame", "Sofia", "Hiroshi",

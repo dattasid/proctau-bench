@@ -4,7 +4,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
-import { generateBank } from "./bank.ts";
+import { generateBank } from "./generate.ts";
 
 const { values } = parseArgs({
   options: {

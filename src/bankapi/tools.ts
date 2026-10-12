@@ -6,13 +6,13 @@ import {
   courtesyReversalsInYear,
   evaluateWaiver,
   premiumSavingsEligible,
-} from "./rules.ts";
-import { PRODUCT_IDS } from "./schema.ts";
-import type { ProductId } from "./schema.ts";
-import { postTransaction, transfer } from "./session.ts";
-import type { Check, Session } from "./session.ts";
-import { nextId } from "./state.ts";
-import type { Account, Transaction } from "./state.ts";
+} from "../bank/rules.ts";
+import { PRODUCT_IDS } from "../bank/schema.ts";
+import type { ProductId } from "../bank/schema.ts";
+import { postTransaction, transfer } from "../env/session.ts";
+import type { Check, Session } from "../env/session.ts";
+import { nextId } from "../bank/state.ts";
+import type { Account, Transaction } from "../bank/state.ts";
 
 export interface Param {
   type: "string" | "number";

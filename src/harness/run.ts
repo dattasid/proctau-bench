@@ -2,9 +2,9 @@
 // calls go to the executor over REST, and the result is evaluated against the task.
 // Half-duplex, like tau2's orchestrator: the agent greets first.
 
-import type { Bank } from "../bank.ts";
-import type { TraceRecord } from "../session.ts";
-import type { Task } from "../tasks.ts";
+import type { Bank } from "../gen/generate.ts";
+import type { TraceRecord } from "../env/session.ts";
+import type { Task } from "../gen/tasks.ts";
 import { EnvClient } from "./env_client.ts";
 import type { ToolDefinition } from "./env_client.ts";
 import { evaluate } from "./evaluate.ts";

@@ -2,11 +2,11 @@
 // template language, because the wording needs real logic (empty waivers, any/all,
 // tiers). Phrasing varies per bank through the seeded rng; facts never do.
 
-import { annualInterestCents } from "./rules.ts";
-import { days, money, moneyCents, percent, times } from "./format.ts";
-import type { Rng } from "./rng.ts";
-import { PRODUCT_IDS } from "./schema.ts";
-import type { BankConfig, InterestBonus, Product, WaiverCondition } from "./schema.ts";
+import { annualInterestCents } from "../bank/rules.ts";
+import { days, money, moneyCents, percent, times } from "../util/format.ts";
+import type { Rng } from "../util/rng.ts";
+import { PRODUCT_IDS } from "../bank/schema.ts";
+import type { BankConfig, InterestBonus, Product, WaiverCondition } from "../bank/schema.ts";
 
 export interface Doc {
   path: string;

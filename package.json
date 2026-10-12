@@ -5,10 +5,10 @@
   "type": "module",
   "description": "Procedurally generated banking policy benchmark: generator and executor",
   "scripts": {
-    "generate": "node --experimental-strip-types --no-warnings src/cli.ts",
+    "generate": "node --experimental-strip-types --no-warnings src/gen/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --no-warnings --test \"test/**/*.test.ts\"",
-    "serve": "node --experimental-strip-types --no-warnings src/serve.ts",
+    "serve": "node --experimental-strip-types --no-warnings src/env/serve.ts",
     "harness": "node --experimental-strip-types --no-warnings src/harness/cli.ts",
     "view": "node --experimental-strip-types --no-warnings src/viewer/cli.ts"
   },

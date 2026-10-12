@@ -1,11 +1,11 @@
 // Runs one tool call against a session and records a trace entry for it:
 // shape check, system and policy checks, the enforcement decision, and the database change.
 
-import type { Enforcement } from "./schema.ts";
+import type { Enforcement } from "../bank/schema.ts";
 import { diffDatabases } from "./session.ts";
 import type { Check, Outcome, Session, TraceRecord } from "./session.ts";
-import { FIXED_ENFORCEMENT, TOOLS } from "./tools.ts";
-import type { Args, Param, Tool } from "./tools.ts";
+import { FIXED_ENFORCEMENT, TOOLS } from "../bankapi/tools.ts";
+import type { Args, Param, Tool } from "../bankapi/tools.ts";
 
 // Policy blocks are deliberately vague: the API does not explain the rule.
 export const DECLINED = "This request was declined.";

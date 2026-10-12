@@ -1,7 +1,7 @@
 // Rule evaluation shared by the database generator, its validator, the documents'
 // worked examples and (next) the executor, so every layer agrees on what a rule means.
 
-import { addDays, ageOn, daysBetween, monthEnd, monthStart } from "./dates.ts";
+import { addDays, ageOn, daysBetween, monthEnd, monthStart } from "../util/dates.ts";
 import type { BankConfig, Interest, WaiverCondition } from "./schema.ts";
 import type { Account, Database, Transaction } from "./state.ts";
 

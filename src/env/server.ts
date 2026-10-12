@@ -13,13 +13,13 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { callTool, toolList } from "./executor.ts";
-import { hashDatabase } from "./hash.ts";
-import type { BankConfig } from "./schema.ts";
+import { hashDatabase } from "../util/hash.ts";
+import type { BankConfig } from "../bank/schema.ts";
 import { createSession } from "./session.ts";
 import type { Session } from "./session.ts";
-import type { Database } from "./state.ts";
-import { validateBank } from "./validate.ts";
-import { validateDatabase } from "./validate_db.ts";
+import type { Database } from "../bank/state.ts";
+import { validateBank } from "../bank/validate.ts";
+import { validateDatabase } from "../bank/validate_db.ts";
 
 const MAX_BODY_BYTES = 50 * 1024 * 1024;
 

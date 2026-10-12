@@ -1,8 +1,8 @@
 // HTTP client for the executor's REST API.
 
-import type { BankConfig } from "../schema.ts";
-import type { Outcome, TraceRecord } from "../session.ts";
-import type { Database } from "../state.ts";
+import type { BankConfig } from "../bank/schema.ts";
+import type { Outcome, TraceRecord } from "../env/session.ts";
+import type { Database } from "../bank/state.ts";
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {

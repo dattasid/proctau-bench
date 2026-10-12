@@ -1,7 +1,7 @@
 // Samples a random but coherent bank. Premium is built from Basic so that it
 // dominates on rate and limits and costs more to open and keep fee-free.
 
-import type { Rng } from "./rng.ts";
+import type { Rng } from "../util/rng.ts";
 import type {
   BankConfig,
   Family,
@@ -11,7 +11,7 @@ import type {
   Policies,
   Product,
   WaiverCondition,
-} from "./schema.ts";
+} from "../bank/schema.ts";
 
 const BANK_PREFIXES = ["Harbor", "Summit", "Cedar", "Lakeside", "Ironwood", "Meridian", "Northgate", "Willow"];
 const BANK_SUFFIXES = ["Bank", "Savings Bank", "Trust", "Community Bank"];

@@ -2,9 +2,9 @@
 // https://github.com/sierra-research/tau2-bench): src/tau2/agent/llm_agent.py and
 // data/tau2/user_simulator/simulation_guidelines.md.
 
-import type { Doc } from "../docs.ts";
-import { longDate } from "../format.ts";
-import type { BankConfig } from "../schema.ts";
+import type { Doc } from "../gen/docs.ts";
+import { longDate } from "../util/format.ts";
+import type { BankConfig } from "../bank/schema.ts";
 
 export const STOP = "###STOP###";
 export const TRANSFER = "###TRANSFER###";

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { after, before, describe, it } from "node:test";
-import { generateBank } from "../src/bank.ts";
+import { generateBank } from "../src/gen/generate.ts";
 import { EnvClient } from "../src/harness/env_client.ts";
 import { evaluate } from "../src/harness/evaluate.ts";
-import { createEnvServer } from "../src/server.ts";
-import { buildTasks } from "../src/tasks.ts";
+import { createEnvServer } from "../src/env/server.ts";
+import { buildTasks } from "../src/gen/tasks.ts";
 
 describe("task templates", () => {
   it("build for many banks, each hitting its intended rule branch", () => {

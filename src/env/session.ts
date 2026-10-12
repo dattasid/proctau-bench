@@ -1,9 +1,9 @@
 // One conversation's environment: the bank config, its own copy of the database,
 // the simulated clock, who is verified, and the trace. The executor never sees the task.
 
-import type { BankConfig, Enforcement } from "./schema.ts";
-import { nextId } from "./state.ts";
-import type { Account, Database, Transaction, TransactionKind } from "./state.ts";
+import type { BankConfig, Enforcement } from "../bank/schema.ts";
+import { nextId } from "../bank/state.ts";
+import type { Account, Database, Transaction, TransactionKind } from "../bank/state.ts";
 
 export interface Check {
   rule: string;
