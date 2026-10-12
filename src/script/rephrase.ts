@@ -4,7 +4,7 @@
 
 import { chat } from "../harness/llm.ts";
 import { longDate, money } from "../util/format.ts";
-import type { CustomerAct, CustomerScript } from "./types.ts";
+import type { CustomerAct, CustomerScript, Goal } from "./types.ts";
 
 const FIELD_NAMES: Record<string, string> = {
   full_name: "full name",
@@ -13,25 +13,40 @@ const FIELD_NAMES: Record<string, string> = {
   product: "product",
   amount: "amount",
   funding_account: "account",
-  account: "account number",
+  account: "account",
+  date: "date",
   reason: "reason",
   other: "that",
 };
 
 // How a value must appear in the customer's message.
 function spoken(field: string, value: string | number): string {
-  if (field === "date_of_birth") return longDate(String(value));
+  if (field === "date_of_birth" || field === "date") return longDate(String(value));
   if (field === "amount") return money(Number(value));
   return String(value);
+}
+
+function goalSentence(goal: Goal): string {
+  return goal.action === "open_account"
+    ? `I'd like to open a ${goal.product} account and fund it with ${money(goal.amount)} from my ${goal.funding_account} account.`
+    : `I was charged a ${money(goal.amount)} monthly fee on ${longDate(goal.date)} on my ${goal.account} account. ` +
+        "I don't think I should have been charged, and I'd like it refunded.";
+}
+
+function goalValues(goal: Goal): string[] {
+  return goal.action === "open_account"
+    ? [goal.product, money(goal.amount), goal.funding_account]
+    : [goal.account, money(goal.amount), longDate(goal.date)];
 }
 
 function sentence(a: CustomerAct): string {
   switch (a.act) {
     case "state_goal":
-      return `I'd like to open a ${a.goal.product} account and fund it with ${money(a.goal.amount)} from my ${a.goal.funding_account} account.`;
+      return goalSentence(a.goal);
     case "give_info":
-      if (a.field === "funding_account") return `Please use my ${a.value} account.`;
+      if (a.field === "funding_account" || a.field === "account") return `It's my ${a.value} account.`;
       if (a.field === "product") return `I'd like to open ${a.value}.`;
+      if (a.field === "date") return `It was charged on ${spoken(a.field, a.value)}.`;
       return `My ${FIELD_NAMES[a.field]} is ${spoken(a.field, a.value)}.`;
     case "dont_have":
       return `I'm sorry, I don't have my ${FIELD_NAMES[a.field]} with me.`;
@@ -40,13 +55,17 @@ function sentence(a: CustomerAct): string {
     case "correct":
       return a.field === "funding_account"
         ? `Actually, I'd like to fund it from my ${a.value} account.`
-        : `Actually, it should be ${spoken(a.field, a.value)}.`;
+        : a.field === "account"
+          ? `Actually, it's my ${a.value} account.`
+          : `Actually, it should be ${spoken(a.field, a.value)}.`;
     case "decline":
-      return `No, thank you. I'd like ${a.goal.product}.`;
+      return a.goal.action === "open_account" ? `No, thank you. I'd like ${a.goal.product}.` : "No, thank you.";
     case "ask_why":
-      return "Why can't I open it?";
+      return "Why not?";
     case "ask_when_eligible":
       return "When will I be able to open it?";
+    case "insist":
+      return "I'd really like this refunded. Is there anything you can do?";
     case "acknowledge":
       return "Okay.";
     case "thank_and_end":
@@ -63,13 +82,13 @@ export function requiredValues(acts: CustomerAct[]): string[] {
   return acts.flatMap((a) => {
     switch (a.act) {
       case "state_goal":
-        return [a.goal.product, money(a.goal.amount), a.goal.funding_account];
+        return goalValues(a.goal);
       case "give_info":
         return [spoken(a.field, a.value)];
       case "correct":
         return [spoken(a.field, a.value)];
       case "decline":
-        return [a.goal.product];
+        return a.goal.action === "open_account" ? [a.goal.product] : [];
       default:
         return [];
     }

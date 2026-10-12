@@ -13,9 +13,11 @@ describe("task scripts", () => {
 
   it("the goal is the open_account call the task is about", () => {
     for (const bank of banks) {
-      for (const task of buildTasks(bank)) {
+      for (const task of buildTasks(bank).filter((t) => t.template.startsWith("open_account"))) {
         const open = (task.forbiddenCalls?.[0] ?? task.goldCalls.at(-1))!.args;
         const { goal, knows } = task.script;
+        assert.equal(goal.action, "open_account");
+        if (goal.action !== "open_account") continue;
         assert.equal(goal.product, bank.config.products[open.productId as string]!.displayName);
         assert.equal(goal.amount, open.initialDeposit);
         const funding = task.db.accounts[open.fundingAccountId as string]!;
@@ -32,7 +34,9 @@ describe("task scripts", () => {
         const open = task.forbiddenCalls![0]!.args;
         const product = bank.config.products[open.productId as string]!;
         const customer = task.db.accounts[open.fundingAccountId as string]!.customerId;
-        const date = task.script.truth.eligible_date!;
+        const truth = task.script.truth;
+        assert.equal(truth.kind, "opening");
+        const date = truth.kind === "opening" ? truth.eligible_date! : "";
         assert.ok(date > bank.config.bank.simulatedDate, task.id);
         assert.ok(meetsRequirements(bank.config, task.db, customer, product, date), `${task.id}: not eligible on ${date}`);
         assert.ok(!meetsRequirements(bank.config, task.db, customer, product, addDays(date, -1)), `${task.id}: already eligible before ${date}`);

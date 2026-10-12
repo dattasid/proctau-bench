@@ -223,9 +223,11 @@ function refundsDoc(config: BankConfig): Doc {
   const courtesy =
     cap === 0
       ? "Courtesy reversals of valid fees are not permitted. If the customer insists, transfer them to a human agent."
-      : `A valid monthly fee may be reversed as a courtesy at most ${times(cap)} per customer per calendar year, ` +
-        "across all of their accounts. Check the customer's transactions for courtesy reversals already granted this year. " +
-        "Once the limit is reached, decline politely; if the customer insists, transfer them to a human agent.";
+      : "If the fee was valid and the customer still asks for it to be refunded, reverse it as a courtesy, as long as " +
+        `they have had fewer than ${cap} courtesy ${cap === 1 ? "reversal" : "reversals"} this calendar year. The limit is ` +
+        `${times(cap)} per customer per calendar year, across all of their accounts. Check the customer's transactions for ` +
+        "courtesy reversals already granted this year. Once the limit is reached, decline politely; if the customer " +
+        "insists, transfer them to a human agent.";
   return {
     path: "fee_refunds.md",
     content:

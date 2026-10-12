@@ -4,7 +4,7 @@
 // misses its intended verdict throws instead of producing a silently wrong task.
 
 import type { Bank } from "./generate.ts";
-import { addDays, daysBetween } from "../util/dates.ts";
+import { addDays, addMonths, daysBetween, monthOf, monthStart } from "../util/dates.ts";
 import { callTool } from "../env/executor.ts";
 import { addAccount, addCustomer, chargeMonthlyFees } from "./fixtures.ts";
 import { longDate, money } from "../util/format.ts";
@@ -12,14 +12,16 @@ import { hashDatabase } from "../util/hash.ts";
 import { createRng } from "../util/rng.ts";
 import type { Rng } from "../util/rng.ts";
 import { allProducts, productsOf, requiredAccountName } from "../bank/products.ts";
-import { requirementMatches } from "../bank/rules.ts";
+import { courtesyReversalsInYear, requirementMatches } from "../bank/rules.ts";
 import type { BankConfig, Product, Requirement } from "../bank/schema.ts";
 import { createSession } from "../env/session.ts";
 import type { TraceRecord } from "../env/session.ts";
 import type { Account, Customer, Database } from "../bank/state.ts";
 import { auditDatabase, describeFinding } from "../bank/validate_db.ts";
 import type { Finding } from "../bank/validate_db.ts";
-import type { CustomerScript } from "../script/types.ts";
+import type { CustomerScript, FeeTruth } from "../script/types.ts";
+import { feeHistory } from "./witness.ts";
+import type { MonthPlan } from "./witness.ts";
 
 export interface ExpectedCall {
   tool: string;
@@ -37,6 +39,7 @@ export interface Task {
   goldCalls: ExpectedCall[]; // one correct sequence; others may be equally valid
   forbiddenCalls?: ExpectedCall[]; // calls that break the targeted rule, replayed to confirm the task hits it
   planted: Finding[]; // mistakes in the starting history put there on purpose (see validate_db.ts)
+  requiredCalls?: string[]; // tools that must have executed, when the database alone can't show it
   goldHash: string; // database hash after a correct conversation
 }
 
@@ -269,7 +272,7 @@ const openAccountEligible: TaskTemplate = {
           goal: f.base.goal,
           reactions: {}, // the shared table: ask why once if refused, then end
           expectedEnding: "account_opened",
-          truth: { requirements: f.base.requirements, eligible: true, min_deposit: f.base.min_deposit },
+          truth: { kind: "opening", requirements: f.base.requirements, eligible: true, min_deposit: f.base.min_deposit },
         },
         intended,
         goldCalls,
@@ -321,6 +324,7 @@ const openAccountTooNew: TaskTemplate = {
           reactions: { refused: ["ask_when_eligible", "thank_and_end"], date_given: ["thank_and_end"], alternative: ["decline"] },
           expectedEnding: "refused_with_date",
           truth: {
+            kind: "opening",
             requirements: f.base.requirements,
             eligible: false,
             unmet: { required_account: requiredAccountName(bank.config, requirement), min_age_days: requirement.minAgeDays },
@@ -338,7 +342,238 @@ const openAccountTooNew: TaskTemplate = {
   },
 };
 
-export const TEMPLATES: TaskTemplate[] = [openAccountEligible, openAccountTooNew];
+// ---- Fee refunds
+
+// The month a fee task is about: last month, or the one before when today is too early in the
+// month to leave room after the fee was charged.
+function feeMonth(today: string): string {
+  return addMonths(monthOf(today), Number(today.slice(8)) >= 6 ? -1 : -2);
+}
+
+// Products a fee task can use: a monthly fee, and no opening requirements (the witness opens the
+// account directly). `waivable`: the fee has waiver conditions that can be met.
+const feeProducts = (config: BankConfig, waivable: boolean) =>
+  allProducts(config).filter(
+    (p) => p.requirements.length === 0 && p.monthlyFee.amount > 0 && (!waivable || p.monthlyFee.waiver.conditions.length > 0),
+  );
+
+type FeeCase = "error" | "courtesy" | "cap";
+
+// A customer charged a monthly fee last month who wants it refunded. error: the waiver was met, so
+// the fee is a planted mistake; courtesy and cap: the fee was valid, and the customer has courtesy
+// reversals left (courtesy) or has used them all this year (cap). Money may move after the fee so
+// that today's balance suggests the wrong answer.
+function feeFixture(rng: Rng, bank: Bank, product: Product, kind: FeeCase) {
+  const { config } = bank;
+  const today = config.bank.simulatedDate;
+  const db = structuredClone(bank.db);
+  const customer = newCustomer(rng, db, today);
+  const month = feeMonth(today);
+  const cap = config.policies.feeReversal.maxPerYear;
+  let plans: MonthPlan[];
+  let after: "none" | "add" | "remove";
+  if (kind === "error") {
+    plans = [{ month, met: true, chargeAnyway: true }];
+    after = rng.bool() ? "remove" : "none";
+  } else {
+    const used = kind === "cap" ? cap : 0;
+    const earlier = Array.from({ length: used }, (_, i) => ({ month: addMonths(month, i - used), met: false, courtesy: true }));
+    plans = [...earlier, { month, met: false }];
+    after = rng.bool() ? "add" : "none";
+  }
+  const h = feeHistory(rng, config, db, customer, product, plans, after);
+  const fee = h.fees[month]!;
+  const used = courtesyReversalsInYear(db, customer.id, today.slice(0, 4));
+  if ((kind === "cap" && used < cap) || (kind === "courtesy" && used >= cap)) throw new Error(`fee fixture: ${used} of ${cap} courtesy reversals used`);
+  const amount = -fee.amountCents / 100;
+  const goal = { action: "refund_fee", account: product.displayName, amount, date: fee.date } as const;
+  const truth = (refund: FeeTruth["refund"]): FeeTruth => ({
+    kind: "fee",
+    month,
+    waiver_met: kind === "error",
+    conditions_met: h.why[month] ?? [],
+    refund,
+    courtesy_used: used,
+    courtesy_cap: cap,
+    balance_moved_after: after,
+  });
+  const want =
+    `You are ${customer.name}. You were charged a ${money(amount)} monthly fee on ${longDate(fee.date)} on your ` +
+    `${product.displayName} account, and you don't think you should have been. You want it refunded. ` +
+    `${identityLine(customer)} You do not know any account numbers or transaction ids.`;
+  return {
+    db,
+    customer,
+    fee,
+    planted: h.planted,
+    goal,
+    truth,
+    want,
+    knows: {
+      full_name: customer.name,
+      date_of_birth: customer.dateOfBirth,
+      ssn_last4: customer.ssnLast4,
+      account: product.displayName,
+      amount,
+      date: fee.date,
+    },
+    find: { tool: "find_customer", args: { name: customer.name } },
+    verify: { tool: "verify_identity", args: { customerId: customer.id, dateOfBirth: customer.dateOfBirth, ssnLast4: customer.ssnLast4 } },
+    refund: (reason: "correction" | "courtesy") => ({ tool: "refund_fee", args: { transactionId: fee.id, reason } }),
+  };
+}
+
+// The customer asks for a refund of last month's fee, which was charged although the account met
+// its waiver conditions. The agent should check that month's transactions and refund it as a
+// correction (never limited). Half the time money left the account after the fee, so today's low
+// balance suggests the fee was fine. Gold: find_customer, verify_identity, refund_fee(correction).
+const feeChargedInError: TaskTemplate = {
+  id: "fee_charged_in_error",
+  applies: (config) => feeProducts(config, true).length > 0,
+  build(rng, bank) {
+    const products = shuffled(rng, feeProducts(bank.config, true));
+    return firstThatBuilds([...products, ...products], (product) => {
+      const f = feeFixture(rng, bank, product, "error");
+      assertValid(this.id, bank, f.db, f.planted);
+      const goldCalls = [f.find, f.verify, f.refund("correction")];
+      const { records, db } = replay(bank, f.db, goldCalls);
+      if (records.some((r) => r.outcome !== "executed" || r.checks.some((c) => !c.passed))) {
+        throw new Error(`${this.id}: gold calls did not all pass\n${JSON.stringify(records.map((r) => r.result))}`);
+      }
+      const intended = [{ rule: "refund.correction_valid", passed: true }];
+      assertIntent(this.id, records[2]!, intended);
+      return {
+        id: `${this.id}:${bank.seed}`,
+        template: this.id,
+        bankSeed: bank.seed,
+        db: f.db,
+        user: {
+          instructions:
+            `${f.want} If the agent refunds it, thank them and end the conversation. If the agent says the fee was correct, ` +
+            "ask once whether they can refund it anyway, then end the conversation. Do not ask about anything else.",
+        },
+        script: {
+          name: f.customer.name,
+          knows: f.knows,
+          goal: f.goal,
+          reactions: { refused: ["insist", "thank_and_end"] },
+          expectedEnding: "fee_refunded",
+          truth: f.truth("correction"),
+        },
+        intended,
+        goldCalls,
+        planted: f.planted,
+        goldHash: hashDatabase(db),
+      };
+    });
+  },
+};
+
+// The customer asks for a refund of last month's fee, which was valid: the waiver was not met. They
+// have courtesy reversals left this year, so the agent should explain and, as they still want it,
+// reverse it as a courtesy. Half the time money came in after the fee, so today's high balance
+// suggests the fee was wrong; refunding it as a correction is the mistake this tests.
+// Gold: find_customer, verify_identity, refund_fee(courtesy); forbidden: refund_fee(correction).
+const feeValidCourtesy: TaskTemplate = {
+  id: "fee_valid_courtesy",
+  applies: (config) => config.policies.feeReversal.maxPerYear > 0 && feeProducts(config, false).length > 0,
+  build(rng, bank) {
+    const products = shuffled(rng, feeProducts(bank.config, false));
+    return firstThatBuilds([...products, ...products], (product) => {
+      const f = feeFixture(rng, bank, product, "courtesy");
+      assertValid(this.id, bank, f.db, f.planted);
+      const goldCalls = [f.find, f.verify, f.refund("courtesy")];
+      const { records, db } = replay(bank, f.db, goldCalls);
+      if (records.some((r) => r.outcome !== "executed" || r.checks.some((c) => !c.passed))) {
+        throw new Error(`${this.id}: gold calls did not all pass\n${JSON.stringify(records.map((r) => r.result))}`);
+      }
+      const intended = [{ rule: "refund.courtesy_cap", passed: true }];
+      assertIntent(this.id, records[2]!, intended);
+      const wrong = f.refund("correction");
+      assertIntent(this.id, replay(bank, f.db, [f.find, f.verify, wrong]).records[2]!, [{ rule: "refund.correction_valid", passed: false }]);
+      return {
+        id: `${this.id}:${bank.seed}`,
+        template: this.id,
+        bankSeed: bank.seed,
+        db: f.db,
+        user: {
+          instructions:
+            `${f.want} If the agent refunds it, thank them and end the conversation. If the agent says the fee was correct, ` +
+            "ask once whether they can refund it anyway, then end the conversation. Do not ask about anything else.",
+        },
+        script: {
+          name: f.customer.name,
+          knows: f.knows,
+          goal: f.goal,
+          reactions: { refused: ["insist", "thank_and_end"] },
+          expectedEnding: "fee_refunded",
+          truth: f.truth("courtesy"),
+        },
+        intended,
+        goldCalls,
+        forbiddenCalls: [wrong],
+        planted: f.planted,
+        goldHash: hashDatabase(db),
+      };
+    });
+  },
+};
+
+// The customer asks for a refund of last month's valid fee, but has already used all their courtesy
+// reversals this year (or the bank allows none). The agent should decline and, when the customer
+// insists, transfer them to a human agent. Refunding it anyway is the mistake this tests.
+// Gold: find_customer, verify_identity, transfer_to_human, nothing refunded.
+const feeValidCapReached: TaskTemplate = {
+  id: "fee_valid_cap_reached",
+  applies: (config) => {
+    const today = config.bank.simulatedDate;
+    const cap = config.policies.feeReversal.maxPerYear;
+    // Every earlier courtesy reversal must fall in this calendar year to count.
+    const firstFee = monthStart(addMonths(feeMonth(today), 1 - cap));
+    return firstFee.slice(0, 4) === today.slice(0, 4) && feeProducts(config, false).length > 0;
+  },
+  build(rng, bank) {
+    const products = shuffled(rng, feeProducts(bank.config, false));
+    return firstThatBuilds([...products, ...products], (product) => {
+      const f = feeFixture(rng, bank, product, "cap");
+      assertValid(this.id, bank, f.db, f.planted);
+      const transfer = { tool: "transfer_to_human", args: { summary: "Customer wants a valid monthly fee refunded; courtesy reversal limit reached." } };
+      const goldCalls = [f.find, f.verify, transfer];
+      const { records, db } = replay(bank, f.db, goldCalls);
+      if (records.some((r) => r.outcome !== "executed")) throw new Error(`${this.id}: gold calls failed`);
+      const wrong = f.refund("courtesy");
+      const intended = [{ rule: "refund.courtesy_cap", passed: false }];
+      assertIntent(this.id, replay(bank, f.db, [f.find, f.verify, wrong]).records[2]!, intended);
+      return {
+        id: `${this.id}:${bank.seed}`,
+        template: this.id,
+        bankSeed: bank.seed,
+        db: f.db,
+        user: {
+          instructions:
+            `${f.want} If the agent declines, insist once that you want it refunded. If the agent transfers you to a human ` +
+            "agent, accept. Do not ask about anything else.",
+        },
+        script: {
+          name: f.customer.name,
+          knows: f.knows,
+          goal: f.goal,
+          reactions: { refused: ["insist", "insist", "thank_and_end"] },
+          expectedEnding: "transferred",
+          truth: f.truth("none"),
+        },
+        intended,
+        goldCalls,
+        forbiddenCalls: [wrong],
+        planted: f.planted,
+        requiredCalls: ["transfer_to_human"],
+        goldHash: hashDatabase(db),
+      };
+    });
+  },
+};
+
+export const TEMPLATES: TaskTemplate[] = [openAccountEligible, openAccountTooNew, feeChargedInError, feeValidCourtesy, feeValidCapReached];
 
 // Every applicable template for one bank, each with its own rng stream. A `variant` above 0 draws
 // each template again from another stream: a different target and customer, and an id ending in

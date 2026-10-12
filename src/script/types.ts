@@ -4,12 +4,21 @@
 
 import type { InfoField } from "../extract/vocab.ts";
 
-export interface Goal {
+export interface OpenGoal {
   action: "open_account";
   product: string; // display name
   amount: number; // dollars
   funding_account: string; // display name of the customer's account
 }
+
+export interface RefundGoal {
+  action: "refund_fee";
+  account: string; // display name of the account the fee was charged to
+  amount: number; // the fee, dollars
+  date: string; // the day the fee was charged
+}
+
+export type Goal = OpenGoal | RefundGoal;
 
 // Situations the engine recognizes in an agent turn, from the extracted acts.
 export const TRIGGERS = [
@@ -17,7 +26,7 @@ export const TRIGGERS = [
   "closing", // the agent says goodbye
   "done", // the agent reports the goal action done
   "date_given", // the agent gives the date from which the customer can open the product
-  "refused", // the agent says the customer is not eligible, or the goal action was not done
+  "refused", // the agent says no: not eligible, the fee was valid, or the goal action was not done
   "confirm_mismatch", // the agent asks to confirm an action that differs from the goal
   "confirm_matches", // the agent asks to confirm the goal action
   "alternative", // the agent suggests something else
@@ -35,6 +44,7 @@ export type Reply =
   | "decline"
   | "ask_why"
   | "ask_when_eligible"
+  | "insist"
   | "acknowledge"
   | "thank_and_end"
   | "end";
@@ -44,10 +54,11 @@ export type CustomerAct =
   | { act: "give_info"; field: InfoField; value: string | number }
   | { act: "dont_have"; field: InfoField }
   | { act: "confirm" }
-  | { act: "correct"; field: keyof Goal; value: string | number }
+  | { act: "correct"; field: string; value: string | number }
   | { act: "decline"; goal: Goal }
   | { act: "ask_why" }
   | { act: "ask_when_eligible" }
+  | { act: "insist" }
   | { act: "acknowledge" }
   | { act: "thank_and_end" };
 
@@ -59,14 +70,28 @@ export interface CustomerScript {
   // This task's own reactions; the shared table (engine.ts) covers every other trigger. The nth time
   // a trigger fires, the nth reply is used; the last one repeats.
   reactions: Partial<Record<Trigger, Reply[]>>;
-  expectedEnding: "account_opened" | "refused_with_date";
+  expectedEnding: "account_opened" | "refused_with_date" | "fee_refunded" | "transferred";
   // What is actually true, for checking what the agent mentions. Written by the template, which built
   // the situation and so knows it.
-  truth: {
-    requirements: { required_account: string; min_age_days: number }[];
-    eligible: boolean;
-    unmet?: { required_account: string; min_age_days: number };
-    eligible_date?: string;
-    min_deposit: number;
-  };
+  truth: OpeningTruth | FeeTruth;
+}
+
+export interface OpeningTruth {
+  kind: "opening";
+  requirements: { required_account: string; min_age_days: number }[];
+  eligible: boolean;
+  unmet?: { required_account: string; min_age_days: number };
+  eligible_date?: string;
+  min_deposit: number;
+}
+
+export interface FeeTruth {
+  kind: "fee";
+  month: string; // the month the fee was for
+  waiver_met: boolean; // so the fee was charged in error
+  conditions_met: string[]; // which waiver conditions held that month
+  refund: "correction" | "courtesy" | "none"; // what the agent should do
+  courtesy_used: number; // courtesy reversals already used this calendar year
+  courtesy_cap: number;
+  balance_moved_after: "none" | "add" | "remove"; // money moved after the fee, making today's balance misleading
 }

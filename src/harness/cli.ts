@@ -90,6 +90,7 @@ try {
           e.dbMatch ? "" : "end state differs",
           ...e.violations.map((v) => `violated ${v.rule}`),
           ...e.blockedAttempts.map((v) => `blocked ${v.rule}`),
+          ...e.missingCalls.map((t) => `never called ${t}`),
         ].filter(Boolean);
         const verdict = e.endReason === "off_script" ? "OFF-SCRIPT" : e.pass ? "PASS" : "FAIL";
         console.log(`${verdict} ${task.id} (${e.endReason}, ${e.counts.calls} calls)${issues.length ? ": " + issues.join("; ") : ""}`);

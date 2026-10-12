@@ -33,7 +33,7 @@ export interface ActSpec {
 export const ACTIONS = ["open_account", "transfer_funds", "refund_fee", "close_account", "other"] as const;
 
 export const INFO_FIELDS = [
-  "full_name", "date_of_birth", "ssn_last4", "product", "amount", "funding_account", "account", "reason", "other",
+  "full_name", "date_of_birth", "ssn_last4", "product", "amount", "funding_account", "account", "date", "reason", "other",
 ] as const;
 export type InfoField = (typeof INFO_FIELDS)[number];
 
@@ -55,7 +55,13 @@ export const ACTS: readonly ActSpec[] = [
     name: "request_info",
     description: "The agent asks the customer for one piece of information. One act per field asked for.",
     args: {
-      field: { type: "string", enum: INFO_FIELDS, description: "What is asked for. Which of the customer's accounts to use for funding is funding_account." },
+      field: {
+        type: "string",
+        enum: INFO_FIELDS,
+        description:
+          "What is asked for. Which of the customer's accounts to fund from is funding_account; which account " +
+          "something happened on (e.g. a fee) is account; when something happened is date.",
+      },
       detail: { type: "string", optional: true, description: "Only for field=other: what exactly is asked for." },
     },
     key: ["field"],
@@ -69,8 +75,10 @@ export const ACTS: readonly ActSpec[] = [
     args: {
       action: { type: "string", enum: ACTIONS, description: "The action to be confirmed." },
       product: { ...product, optional: true },
-      amount: { type: "number", optional: true, description: "Dollars: the deposit or transfer amount." },
+      amount: { type: "number", optional: true, description: "Dollars: the deposit, transfer or refund amount." },
       funding_account: { ...account, optional: true, description: "The customer's account the money would come from." },
+      account: { ...account, optional: true, description: "The customer's account the action is on, e.g. the account a fee was charged to." },
+      refund_type: { type: "string", optional: true, enum: ["correction", "courtesy"], description: "For a fee refund: as a correction or as a courtesy." },
     },
     key: ["action"],
     decides: true,
@@ -98,6 +106,8 @@ export const ACTS: readonly ActSpec[] = [
       product: { ...product, optional: true },
       amount: { type: "number", optional: true, description: "Dollars: the deposit, transfer or refund amount." },
       funding_account: { ...account, optional: true, description: "The customer's account the money came from." },
+      account: { ...account, optional: true, description: "The customer's account the action was on, e.g. the account a fee was charged to." },
+      refund_type: { type: "string", optional: true, enum: ["correction", "courtesy"], description: "For a fee refund: as a correction or as a courtesy." },
       account_number: { type: "string", optional: true, description: "The new account's number or its last digits, if stated." },
       date: { type: "date", optional: true, description: "The date it was done, if stated." },
     },
@@ -164,6 +174,26 @@ export const ACTS: readonly ActSpec[] = [
       sufficient: { type: "boolean", description: "True if the agent says there is enough." },
     },
     key: ["account"],
+    decides: false,
+  },
+
+  {
+    name: "mentions_fee_valid",
+    description:
+      "The agent says whether a monthly fee was charged correctly (valid: the waiver was not met) or charged in " +
+      "error (the waiver was met).",
+    args: {
+      account,
+      valid: { type: "boolean", description: "True if the agent says the fee was charged correctly." },
+    },
+    key: ["account"],
+    decides: true,
+  },
+  {
+    name: "mentions_courtesy_remaining",
+    description: "The agent mentions how many courtesy fee reversals the customer has left this year.",
+    args: { count: { type: "number", description: "How many are left, as stated." } },
+    key: [],
     decides: false,
   },
 

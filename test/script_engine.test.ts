@@ -16,14 +16,14 @@ const eligible: CustomerScript = {
   goal,
   reactions: {},
   expectedEnding: "account_opened",
-  truth: { requirements: [{ required_account: "checking", min_age_days: 60 }], eligible: true, min_deposit: 2500 },
+  truth: { kind: "opening", requirements: [{ required_account: "checking", min_age_days: 60 }], eligible: true, min_deposit: 2500 },
 };
 
 const tooNew: CustomerScript = {
   ...eligible,
   reactions: { refused: ["ask_when_eligible", "thank_and_end"], date_given: ["thank_and_end"], alternative: ["decline"] },
   expectedEnding: "refused_with_date",
-  truth: { ...eligible.truth, eligible: false, eligible_date: "2026-04-04" },
+  truth: { kind: "opening", requirements: [{ required_account: "checking", min_age_days: 60 }], eligible: false, eligible_date: "2026-04-04", min_deposit: 2500 },
 };
 
 const names = (s: ReturnType<typeof step>) => s.acts.map((a) => a.act);
@@ -96,6 +96,24 @@ describe("script engine", () => {
     const mixed = step(eligible, newState(), [act("unknown"), act("greet")]);
     assert.deepEqual(names(mixed), ["state_goal"]);
     assert.deepEqual(mixed.flags, ["unknown act ignored"]);
+  });
+
+  it("refund goal: states the fee, insists once when told it was valid, confirms the right refund", () => {
+    const refund: CustomerScript = {
+      ...eligible,
+      knows: { full_name: "Ada Quinn", account: "Classic Checking", amount: 12, date: "2026-03-01" },
+      goal: { action: "refund_fee", account: "Classic Checking", amount: 12, date: "2026-03-01" },
+      reactions: { refused: ["insist", "thank_and_end"] },
+      expectedEnding: "fee_refunded",
+    };
+    const state = newState();
+    assert.deepEqual(names(step(refund, state, [act("greet")])), ["state_goal"]);
+    assert.deepEqual(step(refund, state, [act("request_info", { field: "date" })]).acts, [{ act: "give_info", field: "date", value: "2026-03-01" }]);
+    assert.deepEqual(names(step(refund, state, [act("mentions_fee_valid", { account: "Classic Checking", valid: true })])), ["insist"]);
+    assert.deepEqual(names(step(refund, state, [act("ask_confirmation", { action: "refund_fee", account: "Classic Checking", amount: 12 })])), ["confirm"]);
+    assert.deepEqual(step(refund, state, [act("ask_confirmation", { action: "refund_fee", amount: 15 })]).acts, [{ act: "correct", field: "amount", value: 12 }]);
+    const done = step(refund, state, [act("action_result", { action: "refund_fee", status: "done", account: "Classic Checking" })]);
+    assert.equal(done.end, "user_stop");
   });
 
   it("ends without a message when the agent transfers or says goodbye", () => {

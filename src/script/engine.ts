@@ -39,15 +39,27 @@ export interface Step {
 const same = (a: unknown, b: unknown) =>
   typeof a === "string" && typeof b === "string" ? a.trim().toLowerCase() === b.trim().toLowerCase() : a === b;
 
+// The goal's details an agent may restate in a confirmation, keyed by the act argument naming them.
+function details(goal: Goal): [string, string | number][] {
+  return goal.action === "open_account"
+    ? [["product", goal.product], ["amount", goal.amount], ["funding_account", goal.funding_account]]
+    : [["account", goal.account], ["amount", goal.amount]];
+}
+
 // The first detail of the goal the agent got wrong in a confirmation, if any.
-function mismatch(goal: Goal, a: Act): { field: keyof Goal; value: string | number } | null {
-  for (const field of ["product", "amount", "funding_account"] as const) {
-    if (a.args[field] !== undefined && !same(a.args[field], goal[field])) return { field, value: goal[field] };
+function mismatch(goal: Goal, a: Act): { field: string; value: string | number } | null {
+  for (const [field, value] of details(goal)) {
+    if (a.args[field] !== undefined && !same(a.args[field], value)) return { field, value };
   }
   return null;
 }
 
-const about = (goal: Goal, a: Act) => a.args.product === undefined || same(a.args.product, goal.product);
+// Whether an act is about the goal's product or account, when it names one.
+function about(goal: Goal, a: Act): boolean {
+  const named = a.args.product ?? a.args.account;
+  if (named === undefined) return true;
+  return goal.action === "open_account" ? same(named, goal.product) : same(named, goal.account);
+}
 
 function triggersOf(script: CustomerScript, acts: Act[]): Set<Trigger> {
   const { goal } = script;
@@ -64,10 +76,13 @@ function triggersOf(script: CustomerScript, acts: Act[]): Set<Trigger> {
         if (a.args.action === goal.action && about(goal, a)) found.add(a.args.status === "done" ? "done" : "refused");
         break;
       case "mentions_eligible_date":
-        if (about(goal, a)) found.add("date_given");
+        if (goal.action === "open_account" && about(goal, a)) found.add("date_given");
         break;
       case "mentions_eligibility":
-        if (about(goal, a) && a.args.eligible === false) found.add("refused");
+        if (goal.action === "open_account" && about(goal, a) && a.args.eligible === false) found.add("refused");
+        break;
+      case "mentions_fee_valid":
+        if (goal.action === "refund_fee" && about(goal, a) && a.args.valid === true) found.add("refused");
         break;
       case "ask_confirmation":
         if (a.args.action === goal.action) found.add(mismatch(goal, a) ? "confirm_mismatch" : "confirm_matches");
