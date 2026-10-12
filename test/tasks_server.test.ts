@@ -15,8 +15,8 @@ describe("task templates", () => {
       assert.ok(bank, `seed ${seed}: ${errors.join("; ")}`);
       for (const task of buildTasks(bank)) counts[task.template] = (counts[task.template] ?? 0) + 1;
     }
-    assert.equal(counts.premium_savings_eligible, 300);
-    assert.ok((counts.premium_savings_checking_too_new ?? 0) > 50, JSON.stringify(counts));
+    assert.equal(counts.open_account_eligible, 300);
+    assert.ok((counts.open_account_held_too_briefly ?? 0) > 50, JSON.stringify(counts));
   });
 });
 
@@ -30,7 +30,10 @@ describe("REST server", () => {
   after(() => server.close());
 
   it("lists tools", async () => {
-    assert.equal((await EnvClient.tools(baseUrl)).length, 9);
+    const { bank } = generateBank(1);
+    const env = await EnvClient.create(baseUrl, bank!.config, bank!.db);
+    assert.equal((await env.tools()).length, 9);
+    await env.close();
   });
 
   it("rejects an invalid environment", async () => {
@@ -55,27 +58,28 @@ describe("REST server", () => {
     }
   });
 
-  it("fails evaluation when the agent opens premium savings too early", async () => {
+  it("fails evaluation when the agent opens a product the customer is not yet eligible for", async () => {
     for (let seed = 1; seed <= 40; seed++) {
       const { bank } = generateBank(seed);
-      const task = buildTasks(bank!).find((t) => t.template === "premium_savings_checking_too_new");
+      const task = buildTasks(bank!).find((t) => t.template === "open_account_held_too_briefly");
       if (!task) continue;
       const env = await EnvClient.create(baseUrl, bank!.config, task.db);
       for (const call of task.goldCalls) await env.call(call.tool, call.args);
       const customerId = task.goldCalls[1]!.args.customerId as string;
-      const checking = Object.values(task.db.accounts).find((a) => a.customerId === customerId)!;
+      const funding = Object.values(task.db.accounts).find((a) => a.customerId === customerId)!;
+      const target = Object.values(bank!.config.products).find((p) => p.requirements.length > 0)!;
       const r = await env.call("open_account", {
         customerId,
-        productId: "savings_premium",
-        initialDeposit: Math.max(bank!.config.products.savings_premium.minOpeningDeposit, 100),
-        fundingAccountId: checking.id,
+        productId: target.id,
+        initialDeposit: Math.max(target.minOpeningDeposit, 100),
+        fundingAccountId: funding.id,
       });
       const { hash } = await env.state();
       const e = evaluate(task, (await env.trace()).trace, hash, "user_stop");
       assert.equal(e.pass, false);
       assert.equal(r.outcome, "executed");
       assert.equal(e.dbMatch, false);
-      assert.equal(e.violations[0]?.rule, "premium_savings.eligibility");
+      assert.equal(e.violations[0]?.rule, "product.eligibility");
       await env.close();
     }
   });

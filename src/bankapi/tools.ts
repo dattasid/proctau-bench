@@ -2,14 +2,10 @@
 // `apply` that performs the call. The executor decides from the checks whether `apply` runs.
 // Amounts the agent sends and sees are dollars; the database stores cents.
 
-import {
-  courtesyReversalsInYear,
-  evaluateWaiver,
-  premiumSavingsEligible,
-} from "../bank/rules.ts";
 import { postTransaction, transfer } from "../bank/ledger.ts";
-import { PRODUCT_IDS } from "../bank/schema.ts";
-import type { ProductId } from "../bank/schema.ts";
+import { productIds } from "../bank/products.ts";
+import { courtesyReversalsInYear, evaluateWaiver, requirementMet } from "../bank/rules.ts";
+import type { BankConfig } from "../bank/schema.ts";
 import { nextId } from "../bank/state.ts";
 import type { Account, Transaction } from "../bank/state.ts";
 import type { BankSession } from "./session.ts";
@@ -26,7 +22,7 @@ export interface Check {
 export interface Param {
   type: "string" | "number";
   description: string;
-  enum?: readonly string[];
+  enum?: readonly string[] | ((config: BankConfig) => readonly string[]); // a function: per bank
   optional?: boolean;
   money?: boolean; // positive, at most two decimals
 }
@@ -180,14 +176,14 @@ export const TOOLS: Tool[] = [
     description: "Open a new account for a verified customer, funded by a transfer from one of their existing accounts.",
     params: {
       customerId: { type: "string", description: "Customer id" },
-      productId: { type: "string", description: "Product to open", enum: PRODUCT_IDS },
+      productId: { type: "string", description: "Product to open", enum: productIds },
       initialDeposit: { type: "number", description: "Opening deposit in dollars", money: true },
       fundingAccountId: { type: "string", description: "The customer's account the deposit comes from" },
     },
     write: true,
     plan: (s, args) => {
       const customerId = str(args, "customerId");
-      const productId = str(args, "productId") as ProductId;
+      const productId = str(args, "productId");
       const deposit = cents(num(args, "initialDeposit"));
       if (!s.db.customers[customerId]) return nothing([system("customer.exists", false, `No customer with id ${customerId}.`)]);
       const funding = accountCheck(s, "funding.account", str(args, "fundingAccountId"));
@@ -199,7 +195,7 @@ export const TOOLS: Tool[] = [
         system("funding.balance", source.balanceCents >= deposit, source.balanceCents >= deposit ? "sufficient funds" : `Insufficient funds in ${source.id}.`),
         identity(s, customerId, true),
       );
-      const product = s.config.products[productId];
+      const product = s.config.products[productId]!;
       checks.push(
         policy(
           "opening.min_deposit",
@@ -207,9 +203,10 @@ export const TOOLS: Tool[] = [
           `deposit ${dollars(deposit)}, minimum ${product.minOpeningDeposit}`,
         ),
       );
-      if (productId === "savings_premium") {
-        const ok = premiumSavingsEligible(s.config, s.db, customerId, s.now);
-        checks.push(policy("premium_savings.eligibility", ok, ok ? "eligible" : "no checking account old enough"));
+      if (product.requirements.length > 0) {
+        const unmet = product.requirements.filter((r) => !requirementMet(s.config, s.db, customerId, r, s.now));
+        const detail = unmet.length === 0 ? "eligible" : unmet.map((r) => `no ${r.accountType} account held ${r.minAgeDays}+ days`).join("; ");
+        checks.push(policy("product.eligibility", unmet.length === 0, detail));
       }
       return {
         checks,

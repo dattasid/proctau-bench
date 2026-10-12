@@ -6,7 +6,6 @@ import type { Bank } from "../gen/generate.ts";
 import type { TraceRecord } from "../env/session.ts";
 import type { Task } from "../gen/tasks.ts";
 import { EnvClient } from "./env_client.ts";
-import type { ToolDefinition } from "./env_client.ts";
 import { evaluate } from "./evaluate.ts";
 import type { EndReason, Evaluation } from "./evaluate.ts";
 import { chat } from "./llm.ts";
@@ -34,7 +33,6 @@ export interface RunOptions {
   apiKey: string;
   agentModel: string;
   userModel: string;
-  tools: ToolDefinition[];
   maxTurns?: number;
   maxToolCallsPerTurn?: number;
 }
@@ -56,8 +54,8 @@ function parseArgs(raw: string): unknown {
 export async function runTask(bank: Bank, task: Task, opts: RunOptions): Promise<RunResult> {
   const maxTurns = opts.maxTurns ?? 25;
   const maxToolCalls = opts.maxToolCallsPerTurn ?? 12;
-  const tools: ChatTool[] = opts.tools.map((t) => ({ type: "function", function: t }));
   const env = await EnvClient.create(opts.baseUrl, bank.config, task.db);
+  const tools: ChatTool[] = (await env.tools()).map((t) => ({ type: "function", function: t }));
 
   const prompts = { agent: agentSystemPrompt(bank.config, bank.docs), user: userSystemPrompt(task.user.instructions) };
   const agentMsgs: ChatMessage[] = [{ role: "system", content: prompts.agent }];

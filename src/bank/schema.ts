@@ -1,17 +1,21 @@
 // Bank config schema: the single source of truth for documents, executor and tasks.
 // Amounts are in dollars, rates are APY percentages (2.5 means 2.5%).
 
+// Account types in order: a product may only require account types listed before its own,
+// so opening requirements can never form a cycle.
 export type AccountType = "checking" | "savings";
 export const ACCOUNT_TYPES: readonly AccountType[] = ["checking", "savings"];
-export type Tier = "basic" | "premium";
-export type ProductId = `${AccountType}_${Tier}`;
 
-export const PRODUCT_IDS: readonly ProductId[] = [
-  "checking_basic",
-  "checking_premium",
-  "savings_basic",
-  "savings_premium",
-];
+// A tier name from BankConfig.tiers, e.g. "basic". A product id is `${accountType}_${tier}`.
+export type Tier = string;
+export type ProductId = string;
+
+// What a customer must already have to open a product. Empty list: anyone may open it.
+export type Requirement = {
+  kind: "holds_account";
+  accountType: AccountType; // an open account of this type...
+  minAgeDays: number; // ...opened at least this many days before the new account
+};
 
 export type WaiverCondition =
   | { kind: "min_balance"; amount: number; measure: "daily_minimum" | "monthly_average" }
@@ -48,6 +52,7 @@ export interface Product {
   tier: Tier;
   displayName: string;
   minOpeningDeposit: number;
+  requirements: Requirement[]; // all must hold
   monthlyFee: MonthlyFee;
   interest: Interest;
   // Empty: no bonus is offered.
@@ -66,11 +71,8 @@ export interface Policies {
     // 0 means the agent may never reverse a fee and must escalate.
     maxPerYear: number;
   };
-  premiumSavingsEligibility: {
-    requiresChecking: boolean;
-    minCheckingAgeDays: number;
-    enforcement: Enforcement;
-  };
+  // How product requirements are enforced when opening an account.
+  eligibilityEnforcement: Enforcement;
 }
 
 export interface BankConfig {
@@ -84,6 +86,7 @@ export interface BankConfig {
   // true: tiers are sampled independently, so a higher tier can be worse on any of these. It
   // tests that the agent reads the numbers instead of assuming the usual order.
   unorderedTiers: boolean;
+  tiers: Tier[]; // lowest to highest; every account type has one product per tier
   products: Record<ProductId, Product>;
   policies: Policies;
 }

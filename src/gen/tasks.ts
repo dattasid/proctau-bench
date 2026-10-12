@@ -11,7 +11,8 @@ import { longDate, money } from "../util/format.ts";
 import { hashDatabase } from "../util/hash.ts";
 import { createRng } from "../util/rng.ts";
 import type { Rng } from "../util/rng.ts";
-import type { BankConfig } from "../bank/schema.ts";
+import { allProducts, productsOf } from "../bank/products.ts";
+import type { BankConfig, Product, Requirement } from "../bank/schema.ts";
 import { createSession } from "../env/session.ts";
 import type { TraceRecord } from "../env/session.ts";
 import type { Customer, Database } from "../bank/state.ts";
@@ -82,40 +83,62 @@ function assertValid(template: string, bank: Bank, db: Database): void {
   if (errors.length > 0) throw new Error(`${template}: fixture breaks the database\n  ${errors.join("\n  ")}`);
 }
 
-// A customer with a checking account `ageDays` old who wants Premium savings
-// funded from it with `deposit` dollars.
-function premiumSavingsFixture(rng: Rng, bank: Bank, ageDays: number) {
+// The product an account-opening task targets and the account its customer already holds.
+// Prefers a product with a holds_account requirement; otherwise the top savings tier. The held
+// account is the requirement's account type (checking when there is none), at a tier that has no
+// requirements of its own so the fixture can always hold it.
+interface OpeningTarget {
+  product: Product;
+  requirement: Requirement | null;
+  held: Product;
+}
+
+function openingTargets(config: BankConfig): OpeningTarget[] {
+  const restricted = allProducts(config).flatMap((product) =>
+    product.requirements.filter((r) => r.kind === "holds_account").map((requirement) => ({ product, requirement })),
+  );
+  const candidates = restricted.length > 0
+    ? restricted
+    : [{ product: productsOf(config, "savings").at(-1)!, requirement: null as Requirement | null }];
+  return candidates.flatMap(({ product, requirement }) => {
+    const held = productsOf(config, requirement?.accountType ?? "checking").find((p) => p.requirements.length === 0);
+    return held ? [{ product, requirement, held }] : [];
+  });
+}
+
+// A customer holding `target.held`, opened `ageDays` ago, who wants `target.product` funded from it.
+function openingFixture(rng: Rng, bank: Bank, target: OpeningTarget, ageDays: number) {
   const { config } = bank;
   const today = config.bank.simulatedDate;
   const db = structuredClone(bank.db);
   const customer = newCustomer(rng, db, today);
-  // Always positive: a $0 deposit is not a valid call, and the minimum can be $0 on unordered banks.
-  const deposit = config.products.savings_premium.minOpeningDeposit + rng.money(500, 3500, 500);
-  const checking = addAccount(db, customer, "checking_basic", addDays(today, -ageDays), (deposit + rng.money(500, 5000, 100)) * 100);
-  chargeMonthlyFees(config, db, checking, today);
+  // Always positive: a $0 deposit is not a valid call, and a minimum can be $0 on unordered banks.
+  const deposit = target.product.minOpeningDeposit + rng.money(500, 3500, 500);
+  const funding = addAccount(db, customer, target.held.id, addDays(today, -ageDays), (deposit + rng.money(500, 5000, 100)) * 100);
+  chargeMonthlyFees(config, db, funding, today);
   const verify = { tool: "verify_identity", args: { customerId: customer.id, dateOfBirth: customer.dateOfBirth, ssnLast4: customer.ssnLast4 } };
   const open = {
     tool: "open_account",
-    args: { customerId: customer.id, productId: "savings_premium", initialDeposit: deposit, fundingAccountId: checking.id },
+    args: { customerId: customer.id, productId: target.product.id, initialDeposit: deposit, fundingAccountId: funding.id },
   };
   const want =
-    `You are ${customer.name}. You want to open a ${config.products.savings_premium.displayName} account ` +
-    `and fund it with ${money(deposit)} from your ${config.products.checking_basic.displayName} account. ` +
+    `You are ${customer.name}. You want to open a ${target.product.displayName} account ` +
+    `and fund it with ${money(deposit)} from your ${target.held.displayName} account. ` +
     `${identityLine(customer)} You do not know any account numbers.`;
-  return { db, customer, checking, deposit, verify, open, want, find: { tool: "find_customer", args: { name: customer.name } } };
+  return { db, customer, funding, deposit, verify, open, want, find: { tool: "find_customer", args: { name: customer.name } } };
 }
 
-const premiumSavingsEligible: TaskTemplate = {
-  id: "premium_savings_eligible",
-  applies: () => true,
+const openAccountEligible: TaskTemplate = {
+  id: "open_account_eligible",
+  applies: (config) => openingTargets(config).length > 0,
   build(rng, bank) {
-    const rule = bank.config.policies.premiumSavingsEligibility;
-    const ageDays = (rule.requiresChecking ? rule.minCheckingAgeDays : 0) + rng.int(5, 300);
-    const f = premiumSavingsFixture(rng, bank, ageDays);
+    const target = rng.pick(openingTargets(bank.config));
+    const ageDays = (target.requirement?.minAgeDays ?? 0) + rng.int(5, 300);
+    const f = openingFixture(rng, bank, target, ageDays);
     assertValid(this.id, bank, f.db);
     const goldCalls = [f.find, f.verify, f.open];
     const { records, db } = replay(bank, f.db, goldCalls);
-    const intended = rule.requiresChecking ? [{ rule: "premium_savings.eligibility", passed: true }] : [];
+    const intended = target.requirement ? [{ rule: "product.eligibility", passed: true }] : [];
     if (records.some((r) => r.outcome !== "executed" || r.checks.some((c) => !c.passed))) {
       throw new Error(`${this.id}: gold calls did not all pass\n${JSON.stringify(records.map((r) => r.result))}`);
     }
@@ -137,21 +160,21 @@ const premiumSavingsEligible: TaskTemplate = {
   },
 };
 
-const premiumSavingsTooNew: TaskTemplate = {
-  id: "premium_savings_checking_too_new",
-  applies: (config) => {
-    const rule = config.policies.premiumSavingsEligibility;
-    return rule.requiresChecking && rule.minCheckingAgeDays >= 2;
-  },
+// Targets whose requirement can be failed by holding the account for too short a time.
+const tooNewTargets = (config: BankConfig) => openingTargets(config).filter((t) => (t.requirement?.minAgeDays ?? 0) >= 2);
+
+const openAccountTooNew: TaskTemplate = {
+  id: "open_account_held_too_briefly",
+  applies: (config) => tooNewTargets(config).length > 0,
   build(rng, bank) {
-    const minDays = bank.config.policies.premiumSavingsEligibility.minCheckingAgeDays;
-    const f = premiumSavingsFixture(rng, bank, rng.int(1, minDays - 1));
+    const target = rng.pick(tooNewTargets(bank.config));
+    const f = openingFixture(rng, bank, target, rng.int(1, target.requirement!.minAgeDays - 1));
     assertValid(this.id, bank, f.db);
     const goldCalls = [f.find, f.verify];
     const { records, db } = replay(bank, f.db, goldCalls);
     if (records.some((r) => r.outcome !== "executed")) throw new Error(`${this.id}: gold calls failed`);
     // Probe the call the agent must not make, to confirm the fixture hits the rule.
-    const intended = [{ rule: "premium_savings.eligibility", passed: false }];
+    const intended = [{ rule: "product.eligibility", passed: false }];
     assertIntent(this.id, replay(bank, f.db, [...goldCalls, f.open]).records[2]!, intended);
     return {
       id: `${this.id}:${bank.seed}`,
@@ -170,7 +193,7 @@ const premiumSavingsTooNew: TaskTemplate = {
   },
 };
 
-export const TEMPLATES: TaskTemplate[] = [premiumSavingsEligible, premiumSavingsTooNew];
+export const TEMPLATES: TaskTemplate[] = [openAccountEligible, openAccountTooNew];
 
 // Every applicable template for one bank, each with its own rng stream.
 export function buildTasks(bank: Bank): Task[] {

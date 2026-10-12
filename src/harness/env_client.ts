@@ -30,10 +30,6 @@ export class EnvClient {
     this.envId = envId;
   }
 
-  static tools(baseUrl: string): Promise<ToolDefinition[]> {
-    return request("GET", `${baseUrl}/tools`);
-  }
-
   static async create(baseUrl: string, config: BankConfig, db: Database): Promise<EnvClient> {
     const { envId } = await request<{ envId: string }>("POST", `${baseUrl}/envs`, { config, db });
     return new EnvClient(baseUrl, envId);
@@ -41,6 +37,10 @@ export class EnvClient {
 
   private get url(): string {
     return `${this.baseUrl}/envs/${this.envId}`;
+  }
+
+  tools(): Promise<ToolDefinition[]> {
+    return request("GET", `${this.url}/tools`);
   }
 
   call(tool: string, args: unknown): Promise<{ result: unknown; outcome: Outcome; record: TraceRecord }> {

@@ -1,8 +1,9 @@
 // Coherence checks. The sampler should never violate these; the validator
 // guards against sampler bugs and against hand-edited configs.
 
+import { productIds, productsOf } from "./products.ts";
 import { highestApy, lowestApy } from "./rules.ts";
-import { ACCOUNT_TYPES, PRODUCT_IDS } from "./schema.ts";
+import { ACCOUNT_TYPES } from "./schema.ts";
 import type { BankConfig, Product } from "./schema.ts";
 
 function minBalanceWaiver(p: Product): number | null {
@@ -14,7 +15,12 @@ export function validateBank(config: BankConfig): string[] {
   const errors: string[] = [];
   const err = (msg: string) => errors.push(msg);
 
-  for (const id of PRODUCT_IDS) {
+  if (config.tiers.length === 0) return ["no tiers"];
+  if (new Set(config.tiers).size !== config.tiers.length) return ["duplicate tier names"];
+  const expected = new Set(productIds(config));
+  for (const id of Object.keys(config.products)) if (!expected.has(id)) err(`${id}: product for an unknown tier or account type`);
+
+  for (const id of expected) {
     const p = config.products[id];
     if (!p) {
       err(`missing product ${id}`);
@@ -35,28 +41,34 @@ export function validateBank(config: BankConfig): string[] {
         if (tiers[i]!.apy <= tiers[i - 1]!.apy) err(`${id}: tier rates not increasing`);
       }
     }
+    for (const r of p.requirements) {
+      // Requirements only point to earlier account types, so they can never form a cycle.
+      if (ACCOUNT_TYPES.indexOf(r.accountType) >= ACCOUNT_TYPES.indexOf(p.accountType)) {
+        err(`${id}: may only require an account type listed before ${p.accountType}`);
+      }
+      if (r.minAgeDays < 0) err(`${id}: negative requirement age`);
+    }
   }
   if (errors.length > 0) return errors;
 
-  // Tier order: only for banks whose tiers are meant to step up.
+  // Tier order: each tier against the one below it, only for banks whose tiers step up.
   for (const accountType of config.unorderedTiers ? [] : ACCOUNT_TYPES) {
-    const basic = config.products[`${accountType}_basic`];
-    const premium = config.products[`${accountType}_premium`];
-    if (lowestApy(premium.interest) <= highestApy(basic.interest) && highestApy(premium.interest) > 0) {
-      err(`${accountType}: premium lowest rate must beat basic highest rate`);
+    const ladder = productsOf(config, accountType);
+    for (let i = 1; i < ladder.length; i++) {
+      const lower = ladder[i - 1]!;
+      const higher = ladder[i]!;
+      const pair = `${lower.id} -> ${higher.id}`;
+      if (lowestApy(higher.interest) <= highestApy(lower.interest) && highestApy(higher.interest) > 0) {
+        err(`${pair}: higher tier's lowest rate must beat the lower tier's highest rate`);
+      }
+      if (higher.minOpeningDeposit <= lower.minOpeningDeposit) err(`${pair}: opening deposit must increase`);
+      if (higher.monthlyFee.amount < lower.monthlyFee.amount) err(`${pair}: fee must not decrease`);
+      const lw = minBalanceWaiver(lower);
+      const hw = minBalanceWaiver(higher);
+      if (lw !== null && hw !== null && hw <= lw) err(`${pair}: waiver balance must increase`);
     }
-    if (premium.minOpeningDeposit <= basic.minOpeningDeposit) err(`${accountType}: premium opening deposit must exceed basic`);
-    if (premium.monthlyFee.amount < basic.monthlyFee.amount) err(`${accountType}: premium fee below basic`);
-    const bw = minBalanceWaiver(basic);
-    const pw = minBalanceWaiver(premium);
-    if (bw !== null && pw !== null && pw <= bw) err(`${accountType}: premium waiver balance must exceed basic`);
   }
 
-  const elig = config.policies.premiumSavingsEligibility;
-  if (!elig.requiresChecking && elig.minCheckingAgeDays !== 0) {
-    // Harmless but misleading in generated documents; normalize in the sampler instead.
-    err("premiumSavingsEligibility: checking age set but checking not required");
-  }
   if (config.policies.feeReversal.maxPerYear < 0) err("feeReversal: negative cap");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(config.bank.simulatedDate)) err("bank.simulatedDate is not an ISO date");
 

@@ -6,11 +6,16 @@ import type { AccountType, WaiverCondition } from "../bank/schema.ts";
 
 export type Range = readonly [min: number, max: number, step: number];
 
-// A chance that depends on a tier's place in the ladder: `bottom` for the lowest tier, `top`
-// for the highest, interpolated in between.
+// A value that depends on a tier's place in the ladder: `bottom` for the lowest tier, `top`
+// for the highest, interpolated in between. Mostly chances; also weights and amounts.
 export interface Odds {
   bottom: number;
   top: number;
+}
+
+// `rank` is 0 for the lowest tier and 1 for the highest.
+export function at(o: Odds, rank: number): number {
+  return o.bottom + (o.top - o.bottom) * rank;
 }
 
 // How one account type is built tier by tier. The bottom tier samples from the anchors;
@@ -31,6 +36,9 @@ export interface AccountTypeSpec {
     tiered: Odds; // otherwise flat
   };
   bonus: Odds;
+  // Opening requirements: an account of an earlier type, held for a while. Placed by the
+  // tier's real position even on unordered banks, since it says nothing about rates or fees.
+  requirement: { chance: Odds; accountType: AccountType; minAgeDays: readonly number[] } | null;
 }
 
 export const SPEC = {
@@ -43,7 +51,7 @@ export const SPEC = {
       [["Bronze", "Silver"], ["Gold", "Platinum"]],
       [["Blue", "Green"], ["Navy", "Emerald"]],
       [["Essential", "Everyday"], ["Plus", "Preferred"]],
-    ],
+    ] as readonly (readonly (readonly string[])[])[],
     simulatedYear: 2026,
   },
 
@@ -64,7 +72,7 @@ export const SPEC = {
   unorderedTiersChance: 0.2,
 
   // Product tiers from lowest to highest. Each account type has one product per tier.
-  tiers: ["basic", "premium"],
+  tiers: ["basic", "premium"] as readonly string[],
 
   accountTypes: {
     checking: {
@@ -79,6 +87,7 @@ export const SPEC = {
         tiered: { bottom: 0, top: 0 },
       },
       bonus: { bottom: 0, top: 0 },
+      requirement: null,
     },
     savings: {
       minOpeningDeposit: { anchor: [0, 100, 25], step: [1000, 10000, 500] },
@@ -92,6 +101,7 @@ export const SPEC = {
         tiered: { bottom: 0.5, top: 0.5 },
       },
       bonus: { bottom: 0.5, top: 0.5 },
+      requirement: { chance: { bottom: 0, top: 0.6 }, accountType: "checking", minAgeDays: [0, 14, 30, 60, 90] },
     },
   } satisfies Record<AccountType, AccountTypeSpec>,
 
@@ -112,8 +122,6 @@ export const SPEC = {
   policies: {
     identityVerification: ["once_per_session", "before_every_write"],
     courtesyReversalsPerYear: [0, 3, 1],
-    premiumSavingsRequiresCheckingChance: 0.6,
-    minCheckingAgeDays: [0, 14, 30, 60, 90],
   },
 
   background: {
@@ -130,13 +138,14 @@ export const SPEC = {
     historyMonths: 3,
     accountAgeDays: [10, 1500, 1],
     checkingChance: 0.85,
-    premiumCheckingChance: 0.3,
     savingsAlongsideCheckingChance: 0.6, // customers without checking always have savings
-    premiumSavingsChance: 0.35, // only when eligible
+    // Relative weight of each tier when picking a customer's product, among the products whose
+    // requirements the customer meets.
+    tierWeight: { checking: { bottom: 0.7, top: 0.3 }, savings: { bottom: 0.65, top: 0.35 } },
     startingBalance: {
       min: 50, // or the product's minimum opening deposit, if higher
       step: 50,
-      max: { checking_basic: 4000, checking_premium: 30000, savings_basic: 15000, savings_premium: 60000 },
+      max: { checking: { bottom: 4000, top: 30000 }, savings: { bottom: 15000, top: 60000 } },
     },
     paycheckChance: 0.7, // of customers with checking
     paycheck: [600, 3000, 50], // per direct deposit
@@ -155,3 +164,5 @@ export const SPEC = {
     savingsTransfer: [50, 500, 50],
   },
 } as const;
+
+export type Spec = typeof SPEC;

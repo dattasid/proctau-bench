@@ -1,7 +1,7 @@
 // Runs one tool call against a session and records a trace entry for it:
 // shape check, system and policy checks, the enforcement decision, and the database change.
 
-import type { Enforcement } from "../bank/schema.ts";
+import type { BankConfig, Enforcement } from "../bank/schema.ts";
 import { TOOLS } from "../bankapi/tools.ts";
 import type { Args, Param, Tool } from "../bankapi/tools.ts";
 import { diffDatabases } from "./session.ts";
@@ -10,7 +10,7 @@ import type { Outcome, RecordedCheck, Session, TraceRecord } from "./session.ts"
 // Policy blocks are deliberately vague: the API does not explain the rule.
 export const DECLINED = "This request was declined.";
 
-// Policy rules with a fixed enforcement. premium_savings.eligibility comes from the config.
+// Policy rules with a fixed enforcement. product.eligibility comes from the config.
 // Benchmark setting: every rule is "agent", as in tau2. "api" is only meant for RL with weak agents.
 export const FIXED_ENFORCEMENT = {
   "identity.verified": "agent",
@@ -22,13 +22,18 @@ export const FIXED_ENFORCEMENT = {
 const byName = new Map(TOOLS.map((t) => [t.name, t]));
 
 function enforcementOf(s: Session, rule: string): Enforcement {
-  if (rule === "premium_savings.eligibility") return s.config.policies.premiumSavingsEligibility.enforcement;
+  if (rule === "product.eligibility") return s.config.policies.eligibilityEnforcement;
   const fixed = (FIXED_ENFORCEMENT as Record<string, Enforcement>)[rule];
   if (!fixed) throw new Error(`no enforcement defined for rule ${rule}`);
   return fixed;
 }
 
-function shapeErrors(tool: Tool, args: unknown): string[] {
+// A parameter's allowed values, for parameters whose values depend on the bank.
+function enumOf(p: Param, config: BankConfig): readonly string[] | undefined {
+  return typeof p.enum === "function" ? p.enum(config) : p.enum;
+}
+
+function shapeErrors(tool: Tool, args: unknown, config: BankConfig): string[] {
   if (typeof args !== "object" || args === null || Array.isArray(args)) return ["arguments must be an object"];
   const errors: string[] = [];
   const given = args as Record<string, unknown>;
@@ -43,7 +48,8 @@ function shapeErrors(tool: Tool, args: unknown): string[] {
       errors.push(`${key} must be a ${p.type}`);
       continue;
     }
-    if (p.enum && !p.enum.includes(v as string)) errors.push(`${key} must be one of ${p.enum.join(", ")}`);
+    const allowed = enumOf(p, config);
+    if (allowed && !allowed.includes(v as string)) errors.push(`${key} must be one of ${allowed.join(", ")}`);
     if (p.money) {
       const n = v as number;
       if (!(n > 0) || Math.abs(n * 100 - Math.round(n * 100)) > 1e-6) errors.push(`${key} must be a positive amount with at most two decimals`);
@@ -62,7 +68,7 @@ export function callTool(s: Session, name: string, args: unknown): TraceRecord {
 
   const tool = byName.get(name);
   if (!tool) return finish({ shapeErrors: [`unknown tool ${name}`], checks: [], outcome: "invalid", result: { error: `Unknown tool ${name}.` }, changes: [] });
-  const shape = shapeErrors(tool, args);
+  const shape = shapeErrors(tool, args, s.config);
   if (shape.length > 0) return finish({ shapeErrors: shape, checks: [], outcome: "invalid", result: { error: shape.join("; ") }, changes: [] });
   if (s.ended) {
     const check: RecordedCheck = { rule: "session.open", kind: "system", passed: false, detail: "The conversation was transferred to a human agent." };
@@ -94,14 +100,14 @@ export function callTool(s: Session, name: string, args: unknown): TraceRecord {
 }
 
 // Tool definitions in JSON Schema form, for the adapter to hand to the agent.
-export function toolList() {
+export function toolList(config: BankConfig) {
   return TOOLS.map((t) => ({
     name: t.name,
     description: t.description,
     parameters: {
       type: "object",
       properties: Object.fromEntries(
-        Object.entries(t.params).map(([k, p]) => [k, { type: p.type, description: p.description, ...(p.enum ? { enum: [...p.enum] } : {}) }]),
+        Object.entries(t.params).map(([k, p]) => [k, { type: p.type, description: p.description, ...(enumOf(p, config) ? { enum: [...enumOf(p, config)!] } : {}) }]),
       ),
       required: Object.entries(t.params).filter(([, p]) => !p.optional).map(([k]) => k),
       additionalProperties: false,

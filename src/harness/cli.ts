@@ -12,7 +12,6 @@ import { parseArgs } from "node:util";
 import { generateBank } from "../gen/generate.ts";
 import { createEnvServer } from "../env/server.ts";
 import { buildTasks } from "../gen/tasks.ts";
-import { EnvClient } from "./env_client.ts";
 import { DEFAULT_MODEL, readApiKey } from "./llm.ts";
 import { agentSystemPrompt } from "./prompts.ts";
 import { runTask } from "./run.ts";
@@ -39,7 +38,6 @@ if (server) {
 
 const runDir = join(values.out, new Date().toISOString().replace(/[:.]/g, "-"));
 mkdirSync(join(runDir, "banks"), { recursive: true });
-const tools = await EnvClient.tools(baseUrl!);
 const writeJson = (path: string, value: unknown) => writeFileSync(path, JSON.stringify(value, null, 2) + "\n");
 const meta: Record<string, unknown> = {
   startedAt: new Date().toISOString(),
@@ -71,7 +69,6 @@ try {
           apiKey,
           agentModel: values["agent-model"],
           userModel: values["user-model"],
-          tools,
         });
         writeJson(join(runDir, `${task.id.replace(/:/g, "_")}.json`), { task, result });
         const e = result.evaluation;

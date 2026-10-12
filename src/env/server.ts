@@ -1,8 +1,8 @@
 // REST wrapper around the executor. Clients create an environment from a config and a
 // starting database; the server never sees tasks.
 //
-//   GET    /tools               tool definitions (JSON Schema)
 //   POST   /envs                {config, db} -> {envId}
+//   GET    /envs/:id/tools      tool definitions (JSON Schema); product choices depend on the bank
 //   POST   /envs/:id/calls      {tool, args} -> {result, outcome, record}
 //   GET    /envs/:id/state      {db, hash}
 //   GET    /envs/:id/trace      {trace, notes, ended}
@@ -75,8 +75,6 @@ export function createEnvServer(): Server {
     const parts = new URL(req.url ?? "/", "http://localhost").pathname.split("/").filter(Boolean);
     const method = req.method ?? "GET";
 
-    if (method === "GET" && parts.length === 1 && parts[0] === "tools") return send(res, 200, toolList());
-
     if (parts[0] !== "envs") throw new HttpError(404, { error: "not found" });
 
     if (parts.length === 1 && method === "POST") {
@@ -106,6 +104,7 @@ export function createEnvServer(): Server {
       const record = callTool(env.session, body.tool, body.args ?? {});
       return send(res, 200, { result: record.result, outcome: record.outcome, record });
     }
+    if (action === "tools" && method === "GET") return send(res, 200, toolList(env.config));
     if (action === "state" && method === "GET") return send(res, 200, { db: env.session.db, hash: hashDatabase(env.session.db) });
     if (action === "trace" && method === "GET") {
       const s = env.session;

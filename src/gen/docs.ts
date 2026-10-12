@@ -5,8 +5,8 @@
 import { annualInterestCents } from "../bank/rules.ts";
 import { days, money, moneyCents, percent, times } from "../util/format.ts";
 import type { Rng } from "../util/rng.ts";
-import { PRODUCT_IDS } from "../bank/schema.ts";
-import type { BankConfig, InterestBonus, Product, WaiverCondition } from "../bank/schema.ts";
+import { allProducts, tierRank } from "../bank/products.ts";
+import type { BankConfig, InterestBonus, Product, Requirement, WaiverCondition } from "../bank/schema.ts";
 
 export interface Doc {
   path: string;
@@ -92,33 +92,45 @@ function interestText(p: Product, say: Say): string {
   return bonuses.length > 0 ? `${text}\n\n${bonuses.join("\n\n")}` : text;
 }
 
-function eligibilityText(config: BankConfig): string {
-  const name = config.products.savings_premium.displayName;
-  const rule = config.policies.premiumSavingsEligibility;
-  if (!rule.requiresChecking) return `Any customer may open ${name}; no other account is required.`;
-  if (rule.minCheckingAgeDays === 0) return `To open ${name}, the customer must already hold an open checking account with us.`;
-  return (
-    `To open ${name}, the customer must have held an open checking account with us for at least ` +
-    `${days(rule.minCheckingAgeDays)}, counted from the date the checking account was opened to today.`
-  );
+function requirementText(r: Requirement): string {
+  switch (r.kind) {
+    case "holds_account":
+      return r.minAgeDays === 0
+        ? `already hold an open ${r.accountType} account with us`
+        : `have held an open ${r.accountType} account with us for at least ${days(r.minAgeDays)}, ` +
+            `counted from the date that account was opened to today`;
+  }
+}
+
+// Empty for a product anyone may open.
+function eligibilityText(p: Product): string {
+  const items = p.requirements.map(requirementText);
+  if (items.length === 0) return "";
+  if (items.length === 1) return `To open ${p.displayName}, the customer must ${items[0]}.`;
+  return `To open ${p.displayName}, the customer must meet all of the following:\n\n${items.map((i) => `- ${i}`).join("\n")}`;
 }
 
 function productSheet(config: BankConfig, p: Product, say: Say): Doc {
   const kind = p.accountType === "checking" ? "checking" : "savings";
+  const rank = tierRank(config, p.tier);
+  // Only the top tier of an ordered bank is described as being for higher balances.
   const intro =
-    p.tier === "basic"
+    rank === 0
       ? say(`${p.displayName} is our everyday ${kind} account.`, `${p.displayName} is ${config.bank.name}'s standard ${kind} account.`)
-      : config.unorderedTiers
-        ? `${p.displayName} is ${config.bank.name}'s premium ${kind} account.` // no claims about how it compares
-        : say(
-            `${p.displayName} is our premium ${kind} account for customers who keep higher balances.`,
-            `${p.displayName} is ${config.bank.name}'s premium ${kind} account.`,
-          );
+      : rank < 1
+        ? `${p.displayName} is one of ${config.bank.name}'s ${kind} accounts.`
+        : config.unorderedTiers
+          ? `${p.displayName} is ${config.bank.name}'s premium ${kind} account.` // no claims about how it compares
+          : say(
+              `${p.displayName} is our premium ${kind} account for customers who keep higher balances.`,
+              `${p.displayName} is ${config.bank.name}'s premium ${kind} account.`,
+            );
   const opening =
     p.minOpeningDeposit > 0
       ? `The minimum opening deposit is ${money(p.minOpeningDeposit)}.`
       : "There is no minimum opening deposit.";
-  const extra = p.id === "savings_premium" ? `\n\n${eligibilityText(config)}` : "";
+  const eligibility = eligibilityText(p);
+  const extra = eligibility ? `\n\n${eligibility}` : "";
   return {
     path: `products/${p.id}.md`,
     content:
@@ -128,7 +140,7 @@ function productSheet(config: BankConfig, p: Product, say: Say): Doc {
 }
 
 function feesDoc(config: BankConfig, say: Say): Doc {
-  const products = PRODUCT_IDS.map((id) => config.products[id]);
+  const products = allProducts(config);
   const schedule = products.map((p) =>
     p.monthlyFee.amount > 0 ? `- ${p.displayName}: ${money(p.monthlyFee.amount)} per month` : `- ${p.displayName}: no monthly fee`,
   );
@@ -148,8 +160,7 @@ function feesDoc(config: BankConfig, say: Say): Doc {
 }
 
 function interestDoc(config: BankConfig, say: Say): Doc {
-  const sections = PRODUCT_IDS.map((id) => {
-    const p = config.products[id];
+  const sections = allProducts(config).map((p) => {
     let example = "";
     if (p.interest.structure === "tiered") {
       const balance = p.interest.tiers.at(-1)!.minBalance + 5000;
@@ -168,9 +179,14 @@ function interestDoc(config: BankConfig, say: Say): Doc {
   };
 }
 
+function eligibilitySection(config: BankConfig): string {
+  const restricted = allProducts(config).filter((p) => p.requirements.length > 0);
+  if (restricted.length === 0) return "Any verified customer may open any of our accounts; no other account is required.";
+  return `${restricted.map(eligibilityText).join("\n\n")}\n\nThe other accounts have no eligibility requirements.`;
+}
+
 function openingDoc(config: BankConfig): Doc {
-  const deposits = PRODUCT_IDS.map((id) => {
-    const p = config.products[id];
+  const deposits = allProducts(config).map((p) => {
     return `- ${p.displayName}: ${p.minOpeningDeposit > 0 ? money(p.minOpeningDeposit) : "no minimum"}`;
   });
   return {
@@ -178,7 +194,7 @@ function openingDoc(config: BankConfig): Doc {
     content:
       `# Opening an account\n\nVerify the customer's identity before opening any account. ` +
       `The opening deposit must be at least the product's minimum:\n\n${deposits.join("\n")}\n\n` +
-      `## Eligibility\n\n${eligibilityText(config)} The other accounts have no eligibility requirements.\n`,
+      `## Eligibility\n\n${eligibilitySection(config)}\n`,
   };
 }
 
@@ -234,7 +250,7 @@ function escalationDoc(): Doc {
 export function renderDocs(rng: Rng, config: BankConfig): Doc[] {
   const say: Say = (...options) => rng.pick(options);
   return [
-    ...PRODUCT_IDS.map((id) => productSheet(config, config.products[id], say)),
+    ...allProducts(config).map((p) => productSheet(config, p, say)),
     feesDoc(config, say),
     interestDoc(config, say),
     openingDoc(config),
@@ -248,8 +264,7 @@ export function renderDocs(rng: Rng, config: BankConfig): Doc[] {
 export function checkDocCoverage(config: BankConfig, docs: Doc[]): string[] {
   const text = docs.map((d) => d.content).join("\n");
   const expected: string[] = [];
-  for (const id of PRODUCT_IDS) {
-    const p = config.products[id];
+  for (const p of allProducts(config)) {
     if (p.minOpeningDeposit > 0) expected.push(money(p.minOpeningDeposit));
     if (p.monthlyFee.amount > 0) expected.push(money(p.monthlyFee.amount));
     for (const c of p.monthlyFee.waiver.conditions) {
@@ -262,9 +277,8 @@ export function checkDocCoverage(config: BankConfig, docs: Doc[]): string[] {
       for (const t of p.interest.tiers) expected.push(money(t.minBalance), percent(t.apy));
     }
     for (const b of p.bonuses) expected.push(percent(b.apyBoost));
+    for (const r of p.requirements) if (r.minAgeDays > 0) expected.push(days(r.minAgeDays));
   }
-  const elig = config.policies.premiumSavingsEligibility;
-  if (elig.minCheckingAgeDays > 0) expected.push(days(elig.minCheckingAgeDays));
   if (config.policies.feeReversal.maxPerYear > 0) expected.push(times(config.policies.feeReversal.maxPerYear));
   return expected.filter((s) => !text.includes(s)).map((s) => `documents never mention ${s}`);
 }

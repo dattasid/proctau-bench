@@ -14,17 +14,19 @@ import { validateDatabase } from "../src/bank/validate_db.ts";
 const DOB = "1988-03-14";
 const SSN = "4821";
 
-// A sampled bank with the policies the test needs pinned down, and one customer
-// holding a checking account of the given age and balance.
+// A sampled bank with the policies the test needs pinned down, Premium savings requiring a
+// checking account held 30 days, and one customer holding a checking account of the given
+// age and balance.
 function setup(policies: Partial<BankConfig["policies"]> = {}, checkingAgeDays = 400, checkingCents = 1_000_000) {
   const config = sampleBank(createRng(1), 1);
   config.policies = {
     ...config.policies,
     identityVerification: "once_per_session",
-    premiumSavingsEligibility: { requiresChecking: true, minCheckingAgeDays: 30, enforcement: "agent" },
+    eligibilityEnforcement: "agent",
     feeReversal: { maxPerYear: 1 },
     ...policies,
   };
+  config.products.savings_premium!.requirements = [{ kind: "holds_account", accountType: "checking", minAgeDays: 30 }];
   const today = config.bank.simulatedDate;
   const db = emptyDatabase();
   const customer = addCustomer(db, { name: "Maria Chen", dateOfBirth: DOB, ssnLast4: SSN });
@@ -36,13 +38,15 @@ const verify = (s: Session, customerId: string) => callTool(s, "verify_identity"
 const failed = (r: { checks: { rule: string; passed: boolean }[] }) => r.checks.filter((c) => !c.passed).map((c) => c.rule);
 
 function openPremiumSavings(s: Session, customerId: string, fundingAccountId: string) {
-  const deposit = s.config.products.savings_premium.minOpeningDeposit;
+  const deposit = Math.max(s.config.products.savings_premium!.minOpeningDeposit, 100);
   return callTool(s, "open_account", { customerId, productId: "savings_premium", initialDeposit: deposit, fundingAccountId });
 }
 
 describe("tool list", () => {
   it("exposes every tool with a JSON schema", () => {
-    const tools = toolList();
+    const tools = toolList(sampleBank(createRng(1), 1));
+    const productEnum = (tools.find((t) => t.name === "open_account")!.parameters.properties.productId as { enum?: string[] }).enum;
+    assert.deepEqual(productEnum, ["checking_basic", "checking_premium", "savings_basic", "savings_premium"]);
     assert.equal(tools.length, 9);
     const open = tools.find((t) => t.name === "open_account")!;
     assert.deepEqual(open.parameters.required, ["customerId", "productId", "initialDeposit", "fundingAccountId"]);
@@ -91,7 +95,7 @@ describe("identity", () => {
   });
 });
 
-describe("premium savings eligibility", () => {
+describe("product eligibility", () => {
   it("opens when the checking account is old enough", () => {
     const { session, customer, checking } = setup({}, 40);
     verify(session, customer.id);
@@ -102,10 +106,7 @@ describe("premium savings eligibility", () => {
 
   // "api" enforcement is only for RL with weak agents; the benchmark never samples it.
   it("blocks a too-young checking account when the API enforces the rule", () => {
-    const { session, customer, checking } = setup(
-      { premiumSavingsEligibility: { requiresChecking: true, minCheckingAgeDays: 30, enforcement: "api" } },
-      20,
-    );
+    const { session, customer, checking } = setup({ eligibilityEnforcement: "api" }, 20);
     verify(session, customer.id);
     const r = openPremiumSavings(session, customer.id, checking.id);
     assert.equal(r.outcome, "blocked");
@@ -119,7 +120,7 @@ describe("premium savings eligibility", () => {
     verify(session, customer.id);
     const r = openPremiumSavings(session, customer.id, checking.id);
     assert.equal(r.outcome, "executed");
-    const rule = r.checks.find((c) => c.rule === "premium_savings.eligibility")!;
+    const rule = r.checks.find((c) => c.rule === "product.eligibility")!;
     assert.equal(rule.passed, false);
     assert.equal(rule.enforcement, "agent");
   });

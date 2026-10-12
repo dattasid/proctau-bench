@@ -2,7 +2,7 @@
 // worked examples and (next) the executor, so every layer agrees on what a rule means.
 
 import { addDays, ageOn, daysBetween, monthEnd, monthStart } from "../util/dates.ts";
-import type { BankConfig, Interest, WaiverCondition } from "./schema.ts";
+import type { BankConfig, Interest, Product, Requirement, WaiverCondition } from "./schema.ts";
 import type { Account, Database, Transaction } from "./state.ts";
 
 const byDate = (a: Transaction, b: Transaction): number => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
@@ -85,16 +85,22 @@ export function courtesyReversalsInYear(db: Database, customerId: string, year: 
     .length;
 }
 
-export function premiumSavingsEligible(config: BankConfig, db: Database, customerId: string, onDate: string): boolean {
-  const rule = config.policies.premiumSavingsEligibility;
-  if (!rule.requiresChecking) return true;
-  return Object.values(db.accounts).some(
-    (a) =>
-      a.customerId === customerId &&
-      a.status === "open" &&
-      a.productId.startsWith("checking") &&
-      daysBetween(a.openedOn, onDate) >= rule.minCheckingAgeDays,
-  );
+export function requirementMet(config: BankConfig, db: Database, customerId: string, r: Requirement, onDate: string): boolean {
+  switch (r.kind) {
+    case "holds_account":
+      return Object.values(db.accounts).some(
+        (a) =>
+          a.customerId === customerId &&
+          a.status === "open" &&
+          config.products[a.productId]?.accountType === r.accountType &&
+          daysBetween(a.openedOn, onDate) >= r.minAgeDays,
+      );
+  }
+}
+
+// Whether the customer may open `product` on `onDate`.
+export function meetsRequirements(config: BankConfig, db: Database, customerId: string, product: Product, onDate: string): boolean {
+  return product.requirements.every((r) => requirementMet(config, db, customerId, r, onDate));
 }
 
 export function lowestApy(interest: Interest): number {

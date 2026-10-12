@@ -1,8 +1,7 @@
 // Database coherence checks, re-deriving every fee and limit from the shared rules.
 
 import { addMonths, ageOn, monthOf, monthStart } from "../util/dates.ts";
-import { courtesyReversalsInYear, endOfDayBalances, monthlyFeeDue, premiumSavingsEligible } from "./rules.ts";
-import { PRODUCT_IDS } from "./schema.ts";
+import { courtesyReversalsInYear, endOfDayBalances, meetsRequirements, monthlyFeeDue } from "./rules.ts";
 import type { BankConfig } from "./schema.ts";
 import type { Database } from "./state.ts";
 
@@ -32,7 +31,8 @@ export function validateDatabase(config: BankConfig, db: Database): string[] {
   for (const [id, a] of Object.entries(db.accounts)) {
     if (a.id !== id) err(`${id}: id field is ${a.id}`);
     if (!db.customers[a.customerId]) err(`${id}: unknown customer ${a.customerId}`);
-    if (!PRODUCT_IDS.includes(a.productId)) err(`${id}: unknown product ${a.productId}`);
+    const product = config.products[a.productId];
+    if (!product) err(`${id}: unknown product ${a.productId}`);
     if (a.openedOn > today) err(`${id}: opened after the simulated date`);
 
     const txns = db.transactions.filter((t) => t.accountId === id);
@@ -51,8 +51,8 @@ export function validateDatabase(config: BankConfig, db: Database): string[] {
       if (due !== charged) err(`${id}: ${month} fee should be ${due} cents, charged ${charged}`);
     }
 
-    if (a.productId === "savings_premium" && !premiumSavingsEligible(config, db, a.customerId, a.openedOn)) {
-      err(`${id}: premium savings opened by an ineligible customer`);
+    if (product && !meetsRequirements(config, db, a.customerId, product, a.openedOn)) {
+      err(`${id}: ${a.productId} opened by a customer who did not meet its requirements`);
     }
   }
 
