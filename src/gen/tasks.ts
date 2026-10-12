@@ -197,6 +197,10 @@ function firstThatBuilds<T>(attempts: T[], build: (a: T) => Task): Task {
   throw last;
 }
 
+// The customer asks to open a product and meets every requirement: each required account is held,
+// and held long enough. The agent should verify identity and open it as asked (product, deposit,
+// funding account). Tests that the agent reads the requirements correctly and does not refuse an
+// eligible customer. Gold: find_customer, verify_identity, open_account.
 const openAccountEligible: TaskTemplate = {
   id: "open_account_eligible",
   applies: (config) => openingTargets(config).length > 0,
@@ -236,6 +240,10 @@ const openAccountEligible: TaskTemplate = {
 const tooNewTargets = (config: BankConfig) =>
   openingTargets(config).flatMap((product) => product.requirements.filter((r) => r.minAgeDays >= 2).map((requirement) => ({ product, requirement })));
 
+// The customer asks to open a product and holds every required account, but one of them was opened
+// too recently to count. The agent should verify identity, decline, and when asked, say from which
+// date the customer becomes eligible. Opening the account anyway is the mistake this tests.
+// Gold: find_customer, verify_identity, and nothing opened; forbidden: that open_account call.
 const openAccountTooNew: TaskTemplate = {
   id: "open_account_held_too_briefly",
   applies: (config) => tooNewTargets(config).length > 0,
