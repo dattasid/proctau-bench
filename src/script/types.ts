@@ -18,7 +18,20 @@ export interface RefundGoal {
   date: string; // the day the fee was charged
 }
 
-export type Goal = OpenGoal | RefundGoal;
+export interface ReportGoal {
+  action: "report_transaction"; // a card purchase the customer did not make
+  account: string;
+  amount: number;
+  date: string;
+  merchant: string;
+}
+
+export interface ServiceGoal {
+  action: "request_service"; // something the bank's policies do not cover
+  request: string; // what the customer says they want, e.g. "order a book of paper checks"
+}
+
+export type Goal = OpenGoal | RefundGoal | ReportGoal | ServiceGoal;
 
 // Situations the engine recognizes in an agent turn, from the extracted acts.
 export const TRIGGERS = [
@@ -47,6 +60,7 @@ export type Reply =
   | "ask_why"
   | "ask_when_eligible"
   | "insist"
+  | "ask_for_human"
   | "correct_identity"
   | "acknowledge"
   | "thank_and_end"
@@ -62,6 +76,7 @@ export type CustomerAct =
   | { act: "ask_why" }
   | { act: "ask_when_eligible" }
   | { act: "insist" }
+  | { act: "ask_for_human" }
   | { act: "correct_info"; field: InfoField; value: string | number }
   | { act: "repeat_info" }
   | { act: "acknowledge" }
@@ -80,7 +95,7 @@ export interface CustomerScript {
   expectedEnding: "account_opened" | "refused_with_date" | "fee_refunded" | "transferred";
   // What is actually true, for checking what the agent mentions. Written by the template, which built
   // the situation and so knows it.
-  truth: OpeningTruth | FeeTruth;
+  truth: OpeningTruth | FeeTruth | HandoverTruth;
 }
 
 export interface OpeningTruth {
@@ -90,6 +105,11 @@ export interface OpeningTruth {
   unmet?: { required_account: string; min_age_days: number };
   eligible_date?: string;
   min_deposit: number;
+}
+
+export interface HandoverTruth {
+  kind: "handover";
+  reason: "unrecognized_transaction" | "out_of_scope"; // why the policy says to transfer
 }
 
 export interface FeeTruth {

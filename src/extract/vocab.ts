@@ -30,7 +30,7 @@ export interface ActSpec {
   aliasOf?: string;
 }
 
-export const ACTIONS = ["open_account", "transfer_funds", "refund_fee", "close_account", "other"] as const;
+export const ACTIONS = ["open_account", "transfer_funds", "refund_fee", "close_account", "dispute_transaction", "other"] as const;
 
 export const INFO_FIELDS = [
   "full_name", "date_of_birth", "ssn_last4", "product", "amount", "funding_account", "account", "date", "reason", "other",
@@ -184,6 +184,18 @@ export const ACTS: readonly ActSpec[] = [
     decides: false,
   },
 
+  {
+    name: "mentions_transaction",
+    description: "The agent mentions a specific transaction on one of the customer's accounts.",
+    args: {
+      account,
+      amount: dollars,
+      date: { type: "date", optional: true, description: "Its date, if stated." },
+      description: { type: "string", optional: true, description: "The merchant or memo, if stated." },
+    },
+    key: ["account", "amount"],
+    decides: false,
+  },
   {
     name: "mentions_fee_valid",
     description:

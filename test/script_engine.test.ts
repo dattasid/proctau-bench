@@ -137,6 +137,22 @@ describe("script engine", () => {
     assert.deepEqual(again.acts, [{ act: "give_info", field: "date_of_birth", value: "1980-02-03" }]);
   });
 
+  it("handover goal: reports the purchase, asks for a human when the agent can't help", () => {
+    const report: CustomerScript = {
+      ...eligible,
+      knows: { full_name: "Ada Quinn", account: "Classic Checking", amount: 245, date: "2026-03-08" },
+      goal: { action: "report_transaction", account: "Classic Checking", amount: 245, date: "2026-03-08", merchant: "Pinewood Books" },
+      reactions: { refused: ["ask_for_human", "thank_and_end"], alternative: ["ask_for_human", "thank_and_end"] },
+      expectedEnding: "transferred",
+      truth: { kind: "handover", reason: "unrecognized_transaction" },
+    };
+    const state = newState();
+    assert.deepEqual(names(step(report, state, [act("greet")])), ["state_goal"]);
+    const cant = step(report, state, [act("action_result", { action: "dispute_transaction", status: "not_done" })]);
+    assert.deepEqual(names(cant), ["ask_for_human"]);
+    assert.deepEqual(names(step(report, state, [act("offer_transfer")])), ["confirm"]);
+  });
+
   it("waits while the agent says it is transferring, accepts an offered transfer, ends on goodbye", () => {
     const t = step(eligible, newState(), [act("transfer_to_human")]);
     assert.deepEqual(names(t), ["acknowledge"]);

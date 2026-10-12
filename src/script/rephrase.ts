@@ -27,16 +27,35 @@ function spoken(field: string, value: string | number): string {
 }
 
 function goalSentence(goal: Goal): string {
-  return goal.action === "open_account"
-    ? `I'd like to open a ${goal.product} account and fund it with ${money(goal.amount)} from my ${goal.funding_account} account.`
-    : `I was charged a ${money(goal.amount)} monthly fee on ${longDate(goal.date)} on my ${goal.account} account. ` +
-        "I don't think I should have been charged, and I'd like it refunded.";
+  switch (goal.action) {
+    case "open_account":
+      return `I'd like to open a ${goal.product} account and fund it with ${money(goal.amount)} from my ${goal.funding_account} account.`;
+    case "refund_fee":
+      return (
+        `I was charged a ${money(goal.amount)} monthly fee on ${longDate(goal.date)} on my ${goal.account} account. ` +
+        "I don't think I should have been charged, and I'd like it refunded."
+      );
+    case "report_transaction":
+      return (
+        `There's a ${money(goal.amount)} card purchase from ${goal.merchant} on ${longDate(goal.date)} on my ` +
+        `${goal.account} account that I didn't make.`
+      );
+    case "request_service":
+      return `I'd like to ${goal.request}.`;
+  }
 }
 
 function goalValues(goal: Goal): string[] {
-  return goal.action === "open_account"
-    ? [goal.product, money(goal.amount), goal.funding_account]
-    : [goal.account, money(goal.amount), longDate(goal.date)];
+  switch (goal.action) {
+    case "open_account":
+      return [goal.product, money(goal.amount), goal.funding_account];
+    case "refund_fee":
+      return [goal.account, money(goal.amount), longDate(goal.date)];
+    case "report_transaction":
+      return [goal.account, money(goal.amount), goal.merchant];
+    case "request_service":
+      return [];
+  }
 }
 
 function sentence(a: CustomerAct): string {
@@ -66,6 +85,8 @@ function sentence(a: CustomerAct): string {
       return "When will I be able to open it?";
     case "insist":
       return "I'd really like this refunded. Is there anything you can do?";
+    case "ask_for_human":
+      return "Could I speak to someone who can help me with this, please?";
     case "correct_info":
       return `I'm sorry, I gave you the wrong ${FIELD_NAMES[a.field]}. It's ${spoken(a.field, a.value)}.`;
     case "repeat_info":

@@ -51,10 +51,20 @@ const same = (a: unknown, b: unknown) =>
 
 // The goal's details an agent may restate in a confirmation, keyed by the act argument naming them.
 function details(goal: Goal): [string, string | number][] {
-  return goal.action === "open_account"
-    ? [["product", goal.product], ["amount", goal.amount], ["funding_account", goal.funding_account]]
-    : [["account", goal.account], ["amount", goal.amount]];
+  switch (goal.action) {
+    case "open_account":
+      return [["product", goal.product], ["amount", goal.amount], ["funding_account", goal.funding_account]];
+    case "refund_fee":
+    case "report_transaction":
+      return [["account", goal.account], ["amount", goal.amount]];
+    case "request_service":
+      return [];
+  }
 }
+
+// The product or account the goal is about, if any.
+const subject = (goal: Goal): string | undefined =>
+  goal.action === "open_account" ? goal.product : goal.action === "request_service" ? undefined : goal.account;
 
 // The first detail of the goal the agent got wrong in a confirmation, if any.
 function mismatch(goal: Goal, a: Act): { field: string; value: string | number } | null {
@@ -67,9 +77,12 @@ function mismatch(goal: Goal, a: Act): { field: string; value: string | number }
 // Whether an act is about the goal's product or account, when it names one.
 function about(goal: Goal, a: Act): boolean {
   const named = a.args.product ?? a.args.account;
-  if (named === undefined) return true;
-  return goal.action === "open_account" ? same(named, goal.product) : same(named, goal.account);
+  const mine = subject(goal);
+  return named === undefined || mine === undefined || same(named, mine);
 }
+
+// Goals no tool can carry out: the agent's job is to hand over, so any "not done" is a refusal.
+const handover = (goal: Goal) => goal.action === "report_transaction" || goal.action === "request_service";
 
 function triggersOf(script: CustomerScript, acts: Act[]): Set<Trigger> {
   const { goal } = script;
@@ -90,6 +103,7 @@ function triggersOf(script: CustomerScript, acts: Act[]): Set<Trigger> {
         break;
       case "action_result":
         if (a.args.action === goal.action && about(goal, a)) found.add(a.args.status === "done" ? "done" : "refused");
+        else if (handover(goal) && a.args.status !== "done") found.add("refused");
         break;
       case "mentions_eligible_date":
         if (goal.action === "open_account" && about(goal, a)) found.add("date_given");

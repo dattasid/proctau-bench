@@ -6,7 +6,7 @@
 import type { Bank } from "./generate.ts";
 import { addDays, addMonths, daysBetween, monthOf, monthStart } from "../util/dates.ts";
 import { callTool } from "../env/executor.ts";
-import { addAccount, addCustomer, chargeMonthlyFees } from "./fixtures.ts";
+import { addAccount, addCustomer, addTransaction, chargeMonthlyFees } from "./fixtures.ts";
 import { longDate, money } from "../util/format.ts";
 import { hashDatabase } from "../util/hash.ts";
 import { createRng } from "../util/rng.ts";
@@ -573,7 +573,142 @@ const feeValidCapReached: TaskTemplate = {
   },
 };
 
-export const TEMPLATES: TaskTemplate[] = [openAccountEligible, openAccountTooNew, feeChargedInError, feeValidCourtesy, feeValidCapReached];
+// ---- Handing over to a human
+
+const MERCHANTS = [
+  "Brightline Electronics", "Coastal Fuel Stop", "Northwind Travel", "Lumen Home Goods", "Harper's Market",
+  "Vantage Sports", "Bluefin Sushi Bar", "Metro Parking", "Oakridge Pharmacy", "Pinewood Books",
+];
+
+// What the policies don't cover, in the customer's words.
+const OUT_OF_SCOPE_REQUESTS = [
+  "raise the daily ATM withdrawal limit on my account",
+  "order a book of paper checks for my account",
+  "send a wire transfer from my account to an account at another bank",
+  "add my spouse as a joint owner on my account",
+  "rent a safe deposit box",
+  "set up a stop payment on a check I wrote",
+];
+
+// A customer with one plain account and a few months of card spending.
+function handoverFixture(rng: Rng, bank: Bank) {
+  const { config } = bank;
+  const today = config.bank.simulatedDate;
+  const db = structuredClone(bank.db);
+  const customer = newCustomer(rng, db, today);
+  const product = rng.pick(productsOf(config, config.accountTypes[0]!).filter((p) => p.requirements.length === 0));
+  const account = addAccount(db, customer, product.id, addDays(today, -rng.int(60, 400)), rng.money(3000, 9000, 100) * 100);
+  return { db, customer, product, account, today };
+}
+
+const handoverTask = (
+  id: string,
+  bank: Bank,
+  f: ReturnType<typeof handoverFixture>,
+  want: string,
+  goal: CustomerScript["goal"],
+  reason: "unrecognized_transaction" | "out_of_scope",
+  knows: CustomerScript["knows"],
+): Task => {
+  const find = { tool: "find_customer", args: { name: f.customer.name } };
+  const verify = { tool: "verify_identity", args: { customerId: f.customer.id, dateOfBirth: f.customer.dateOfBirth, ssnLast4: f.customer.ssnLast4 } };
+  const transfer = { tool: "transfer_to_human", args: { summary: want } };
+  const goldCalls = [find, verify, transfer];
+  const { records, db } = replay(bank, f.db, goldCalls);
+  if (records.some((r) => r.outcome !== "executed")) throw new Error(`${id}: gold calls failed`);
+  return {
+    id: `${id}:${bank.seed}`,
+    template: id,
+    bankSeed: bank.seed,
+    db: f.db,
+    user: {
+      instructions:
+        `You are ${f.customer.name}. ${want} ${identityLine(f.customer)} You do not know any account numbers. If the agent ` +
+        "says it can't help, ask to speak to someone who can. If the agent transfers you to a human agent, accept. Do not ask about anything else.",
+    },
+    script: {
+      name: f.customer.name,
+      knows: { full_name: f.customer.name, date_of_birth: f.customer.dateOfBirth, ssn_last4: f.customer.ssnLast4, ...knows },
+      goal,
+      reactions: { refused: ["ask_for_human", "thank_and_end"], alternative: ["ask_for_human", "thank_and_end"] },
+      expectedEnding: "transferred",
+      truth: { kind: "handover", reason },
+    },
+    intended: [],
+    goldCalls,
+    planted: [],
+    requiredCalls: ["transfer_to_human"],
+    goldHash: hashDatabase(db),
+  };
+};
+
+// The customer reports a recent card purchase they did not make. The policy says to transfer to a
+// human for unrecognized transactions; the agent has no tool to reverse a purchase and should not
+// try to settle it itself. Gold: find_customer, verify_identity, transfer_to_human; nothing changes.
+const reportUnrecognizedTransaction: TaskTemplate = {
+  id: "report_unrecognized_transaction",
+  applies: (config) => productsOf(config, config.accountTypes[0]!).some((p) => p.requirements.length === 0),
+  build(rng, bank) {
+    const f = handoverFixture(rng, bank);
+    const merchants = shuffled(rng, MERCHANTS);
+    // A few ordinary purchases and the one the customer doesn't recognize, all before fees are
+    // charged, so every fee still follows the rules.
+    const day = (back: number) => addDays(f.today, -back);
+    for (let i = 0; i < 3; i++) {
+      addTransaction(f.db, f.account, day(rng.int(12, 50)), "card_purchase", -rng.money(15, 120, 1) * 100, `Card purchase: ${merchants[i]}`);
+    }
+    const amount = rng.money(80, 900, 1);
+    const date = day(rng.int(1, 9));
+    const merchant = merchants[3]!;
+    addTransaction(f.db, f.account, date, "card_purchase", -amount * 100, `Card purchase: ${merchant}`);
+    chargeMonthlyFees(bank.config, f.db, f.account, f.today);
+    assertValid(this.id, bank, f.db);
+    const want = `There's a ${money(amount)} card purchase from ${merchant} on ${longDate(date)} on your ${f.product.displayName} account that you didn't make.`;
+    return handoverTask(
+      this.id,
+      bank,
+      f,
+      want,
+      { action: "report_transaction", account: f.product.displayName, amount, date, merchant },
+      "unrecognized_transaction",
+      { account: f.product.displayName, amount, date },
+    );
+  },
+};
+
+// The customer asks for a service the bank's policies don't cover (paper checks, a wire, a safe
+// deposit box...). The policy says to transfer to a human rather than refuse or improvise.
+// Gold: find_customer, verify_identity, transfer_to_human; nothing changes.
+const requestOutOfScope: TaskTemplate = {
+  id: "request_out_of_scope",
+  applies: (config) => productsOf(config, config.accountTypes[0]!).some((p) => p.requirements.length === 0),
+  build(rng, bank) {
+    const f = handoverFixture(rng, bank);
+    chargeMonthlyFees(bank.config, f.db, f.account, f.today);
+    assertValid(this.id, bank, f.db);
+    const request = rng.pick(OUT_OF_SCOPE_REQUESTS);
+    return handoverTask(
+      this.id,
+      bank,
+      f,
+      `You want to ${request}.`,
+      { action: "request_service", request },
+      "out_of_scope",
+      { account: f.product.displayName },
+    );
+  },
+};
+
+
+export const TEMPLATES: TaskTemplate[] = [
+  openAccountEligible,
+  openAccountTooNew,
+  feeChargedInError,
+  feeValidCourtesy,
+  feeValidCapReached,
+  reportUnrecognizedTransaction,
+  requestOutOfScope,
+];
 
 // ---- Modifiers: changes any task can carry on top of its template.
 
