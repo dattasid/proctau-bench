@@ -10,7 +10,7 @@
 // them; whoever builds a database decides which ones it meant (see gen/tasks.ts).
 
 import { addMonths, ageOn, monthOf, monthStart } from "../util/dates.ts";
-import { courtesyReversalsInYear, endOfDayBalances, meetsRequirements, monthlyFeeDue } from "./rules.ts";
+import { courtesyReversalsInYear, endOfDayBalances, meetsRequirements, monthlyFeeDue, transferLimited, transfersOutInMonth } from "./rules.ts";
 import type { BankConfig } from "./schema.ts";
 import type { Database } from "./state.ts";
 
@@ -19,6 +19,7 @@ export type Finding =
   | { kind: "opened_while_ineligible"; account: string; productId: string }
   | { kind: "over_courtesy_cap"; customer: string; year: string; count: number; cap: number }
   | { kind: "negative_balance"; account: string }
+  | { kind: "over_transfer_limit"; account: string; month: string; count: number; limit: number }
   | { kind: "underage_customer"; customer: string };
 
 export function describeFinding(f: Finding): string {
@@ -31,6 +32,8 @@ export function describeFinding(f: Finding): string {
       return `${f.customer}: ${f.count} courtesy reversals in ${f.year}, cap ${f.cap}`;
     case "negative_balance":
       return `${f.account}: balance goes negative`;
+    case "over_transfer_limit":
+      return `${f.account}: ${f.count} transfers out in ${f.month}, limit ${f.limit}`;
     case "underage_customer":
       return `${f.customer}: under 18`;
   }
@@ -90,6 +93,14 @@ export function auditDatabase(config: BankConfig, db: Database): Audit {
       const due = monthlyFeeDue(config, db, a, month);
       const charged = -txns.filter((t) => t.kind === "monthly_fee" && t.feeMonth === month).reduce((s, t) => s + t.amountCents, 0);
       if (due !== charged) findings.push({ kind: "wrong_fee", account: id, month, dueCents: due, chargedCents: charged });
+    }
+
+    if (transferLimited(config, a)) {
+      const limit = config.policies.transferLimit!.perMonth;
+      for (const month of new Set(txns.filter((t) => t.kind === "transfer_out").map((t) => t.date.slice(0, 7)))) {
+        const count = transfersOutInMonth(db, id, month);
+        if (count > limit) findings.push({ kind: "over_transfer_limit", account: id, month, count, limit });
+      }
     }
 
     if (!meetsRequirements(config, db, a.customerId, product, a.openedOn)) {

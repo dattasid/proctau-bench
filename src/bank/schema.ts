@@ -71,6 +71,9 @@ export interface Policies {
   };
   // How product requirements are enforced when opening an account.
   eligibilityEnforcement: Enforcement;
+  // Transfers out of accounts of these types are limited per calendar month (transfers in are not).
+  // null: no limit on any account.
+  transferLimit: { perMonth: number; accountTypes: AccountType[] } | null;
 }
 
 export interface BankConfig {

@@ -91,6 +91,17 @@ export function monthlyFeeDue(config: BankConfig, db: Database, account: Account
   return evaluateWaiver(config, db, account, month).waived ? 0 : fee * 100;
 }
 
+// Transfers out of one account in a calendar month (YYYY-MM), for the monthly transfer limit.
+export function transfersOutInMonth(db: Database, accountId: string, month: string): number {
+  return db.transactions.filter((t) => t.accountId === accountId && t.kind === "transfer_out" && t.date.startsWith(month)).length;
+}
+
+// Whether transfers out of this account count against the bank's monthly limit.
+export function transferLimited(config: BankConfig, account: Account): boolean {
+  const limit = config.policies.transferLimit;
+  return !!limit && limit.accountTypes.includes(config.products[account.productId]!.accountType);
+}
+
 // Courtesy reversals count per customer, across all their accounts, per calendar year.
 export function courtesyReversalsInYear(db: Database, customerId: string, year: string): number {
   const owned = new Set(Object.values(db.accounts).filter((a) => a.customerId === customerId).map((a) => a.id));

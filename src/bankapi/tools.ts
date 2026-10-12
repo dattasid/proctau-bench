@@ -4,7 +4,7 @@
 
 import { postTransaction, transfer } from "../bank/ledger.ts";
 import { productIds, requiredAccountName } from "../bank/products.ts";
-import { courtesyReversalsInYear, evaluateWaiver, requirementMet } from "../bank/rules.ts";
+import { courtesyReversalsInYear, evaluateWaiver, requirementMet, transferLimited, transfersOutInMonth } from "../bank/rules.ts";
 import type { BankConfig } from "../bank/schema.ts";
 import { nextId } from "../bank/state.ts";
 import type { Account, Transaction } from "../bank/state.ts";
@@ -258,6 +258,11 @@ export const TOOLS: Tool[] = [
         system("funding.balance", src.balanceCents >= amount, src.balanceCents >= amount ? "sufficient funds" : `Insufficient funds in ${src.id}.`),
         identity(s, src.customerId, true),
       );
+      if (transferLimited(s.config, src)) {
+        const used = transfersOutInMonth(s.db, src.id, s.now.slice(0, 7));
+        const limit = s.config.policies.transferLimit!.perMonth;
+        checks.push(policy("transfer.monthly_limit", used < limit, `${used} of ${limit} transfers out of ${src.id} this month`));
+      }
       return {
         checks,
         apply: () => {

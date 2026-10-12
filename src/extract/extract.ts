@@ -109,6 +109,13 @@ Agent turn: "I found two Classic Checking accounts in your name. Which one shoul
 Acts:
 - request_info(field="funding_account")
 ("I found two accounts" only sets up the question; it is not a fact to record.)
+
+Example 10
+Agent turn: "I can look into whether that fee should have been waived, and if it should, I'll refund it. First, what's your date of birth?"
+Acts:
+- pleasantry()
+- request_info(field="date_of_birth")
+(What the agent can or will do, or would do if something turns out true, is not a result: no action_result, no mentions_fee_valid.)
 `.trim();
 
 export function extractorSystemPrompt(): string {
@@ -129,6 +136,8 @@ export function extractorSystemPrompt(): string {
     "- Every act has a quote: the shortest exact span of the agent turn that supports it, copied character for",
     "  character. If the support is in several places, join the exact pieces with \" ... \".",
     "- Politeness with no content is pleasantry. A sentence that only sets up the next one adds no act.",
+    "- Record outcomes and facts only when the agent states them as settled. Offers, plans and conditions (\"I can",
+    "  refund it if...\", \"I'll check whether...\") are not results: no action_result, verdict or validity act.",
     "- unknown is only for what no act can express (off-topic remarks, claims outside banking, nonsense). Check",
     "  every act, including the aliases, before using it, and never stretch an act to make something fit.",
     "- Amounts in dollars, as numbers. Products by their exact names from the bank's list.",

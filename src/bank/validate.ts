@@ -84,6 +84,9 @@ export function validateBank(config: BankConfig): string[] {
   }
 
   if (config.policies.feeReversal.maxPerYear < 0) err("feeReversal: negative cap");
+  const limit = config.policies.transferLimit;
+  if (limit && limit.perMonth < 1) err("transferLimit: must allow at least one transfer a month");
+  if (limit && limit.accountTypes.some((t) => !config.accountTypes.includes(t))) err("transferLimit: unknown account type");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(config.bank.simulatedDate)) err("bank.simulatedDate is not an ISO date");
 
   return errors;

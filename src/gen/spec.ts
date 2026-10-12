@@ -23,6 +23,7 @@ export function at(o: Odds, rank: number): number {
 // The key in SPEC.accountTypes is the type's name; customers see it with underscores as spaces.
 export interface AccountTypeSpec {
   presence: number; // chance a bank offers this type; a type whose required type is missing is left out
+  transferOutLimited: boolean; // covered by the bank's monthly transfer limit, when it has one
   minOpeningDeposit: { anchor: Range; step: Range };
   fee: { anchor: Range; step: Range; free: Odds };
   waiver: {
@@ -57,6 +58,7 @@ export interface AccountTypeSpec {
 const ACCOUNT_TYPES: Record<AccountType, AccountTypeSpec> = {
   checking: {
     presence: 1,
+    transferOutLimited: false,
     minOpeningDeposit: { anchor: [0, 100, 25], step: [500, 5000, 500] },
     fee: { anchor: [5, 15, 1], step: [5, 20, 1], free: { bottom: 0, top: 0 } },
     waiver: { kinds: ["min_balance", "direct_deposit", "senior"], minBalance: [500, 2500, 250], minBalanceGrowth: 10 },
@@ -80,6 +82,7 @@ const ACCOUNT_TYPES: Record<AccountType, AccountTypeSpec> = {
   },
   savings: {
     presence: 1,
+    transferOutLimited: true,
     minOpeningDeposit: { anchor: [0, 100, 25], step: [1000, 10000, 500] },
     fee: { anchor: [2, 5, 1], step: [8, 20, 1], free: { bottom: 0.4, top: 0 } },
     waiver: { kinds: ["min_balance", "linked_account", "senior"], minBalance: [300, 1500, 100], minBalanceGrowth: 15 },
@@ -103,6 +106,7 @@ const ACCOUNT_TYPES: Record<AccountType, AccountTypeSpec> = {
   },
   business_checking: {
     presence: 0.5,
+    transferOutLimited: false,
     minOpeningDeposit: { anchor: [100, 500, 50], step: [1000, 5000, 500] },
     fee: { anchor: [10, 25, 1], step: [10, 30, 1], free: { bottom: 0, top: 0 } },
     waiver: { kinds: ["min_balance", "linked_account"], minBalance: [2000, 10000, 500], minBalanceGrowth: 6 },
@@ -126,6 +130,7 @@ const ACCOUNT_TYPES: Record<AccountType, AccountTypeSpec> = {
   },
   business_savings: {
     presence: 0.7, // of banks with business checking
+    transferOutLimited: true,
     minOpeningDeposit: { anchor: [500, 2000, 100], step: [2000, 10000, 500] },
     fee: { anchor: [5, 10, 1], step: [10, 20, 1], free: { bottom: 0.2, top: 0 } },
     waiver: { kinds: ["min_balance", "linked_account"], minBalance: [2500, 10000, 500], minBalanceGrowth: 8 },
@@ -212,6 +217,8 @@ export const SPEC = {
   policies: {
     identityVerification: ["once_per_session", "before_every_write"],
     courtesyReversalsPerYear: [0, 3, 1],
+    transferLimitChance: 0.6,
+    transfersOutPerMonth: [2, 6, 1],
   },
 
   background: {

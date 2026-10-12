@@ -239,6 +239,24 @@ function refundsDoc(config: BankConfig): Doc {
   };
 }
 
+function transfersDoc(config: BankConfig): Doc {
+  const limit = config.policies.transferLimit;
+  const names = limit ? limit.accountTypes.map((t) => accountTypeName(t)).join(" and ") : "";
+  const rule = limit
+    ? `Transfers out of ${names} accounts are limited to ${times(limit.perMonth)} per account per calendar month; ` +
+      "transfers into them are not limited. Before moving money out of such an account, count the transfers out of it " +
+      "so far this month. Once the limit is reached, decline the transfer; the customer can transfer again from the " +
+      "first day of next month."
+    : "There is no limit on the number of transfers between a customer's accounts.";
+  return {
+    path: "transfers.md",
+    content:
+      "# Transfers between accounts\n\nA verified customer can move money between their own accounts. Confirm the " +
+      "amount and both accounts with the customer before moving money. The account the money comes from must have " +
+      `enough funds.\n\n## Limits\n\n${rule}\n`,
+  };
+}
+
 function escalationDoc(): Doc {
   return {
     path: "escalation.md",
@@ -261,6 +279,7 @@ export function renderDocs(rng: Rng, config: BankConfig): Doc[] {
     openingDoc(config),
     identityDoc(config),
     refundsDoc(config),
+    transfersDoc(config),
     escalationDoc(),
   ];
 }
@@ -285,5 +304,6 @@ export function checkDocCoverage(config: BankConfig, docs: Doc[]): string[] {
     for (const r of p.requirements) if (r.minAgeDays > 0) expected.push(days(r.minAgeDays));
   }
   if (config.policies.feeReversal.maxPerYear > 0) expected.push(times(config.policies.feeReversal.maxPerYear));
+  if (config.policies.transferLimit) expected.push(times(config.policies.transferLimit.perMonth));
   return expected.filter((s) => !text.includes(s)).map((s) => `documents never mention ${s}`);
 }

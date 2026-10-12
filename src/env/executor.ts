@@ -17,6 +17,7 @@ export const FIXED_ENFORCEMENT = {
   "opening.min_deposit": "agent",
   "refund.correction_valid": "agent",
   "refund.courtesy_cap": "agent",
+  "transfer.monthly_limit": "agent",
 } as const;
 
 const byName = new Map(TOOLS.map((t) => [t.name, t]));

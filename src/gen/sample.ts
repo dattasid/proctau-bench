@@ -167,11 +167,16 @@ function sampleProducts(rng: Rng, spec: Spec, accountTypes: string[], unordered:
   return products;
 }
 
-function samplePolicies(rng: Rng, spec: Spec): Policies {
+function samplePolicies(rng: Rng, spec: Spec, accountTypes: string[]): Policies {
+  const limited = accountTypes.filter((t) => spec.accountTypes[t]!.transferOutLimited);
   return {
     identityVerification: rng.pick(spec.policies.identityVerification),
     feeReversal: { maxPerYear: rng.int(...spec.policies.courtesyReversalsPerYear) },
     eligibilityEnforcement: "agent", // "api" only for RL with weak agents, see Enforcement
+    transferLimit:
+      limited.length > 0 && rng.bool(spec.policies.transferLimitChance)
+        ? { perMonth: rng.int(...spec.policies.transfersOutPerMonth), accountTypes: limited }
+        : null,
   };
 }
 
@@ -201,6 +206,6 @@ export function sampleBank(rng: Rng, seed: number, spec: Spec = SPEC): BankConfi
     accountTypes,
     productRequirements,
     products: sampleProducts(rng, spec, accountTypes, unorderedTiers, productRequirements),
-    policies: samplePolicies(rng, spec),
+    policies: samplePolicies(rng, spec, accountTypes),
   };
 }
