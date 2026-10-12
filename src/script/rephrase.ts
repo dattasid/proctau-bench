@@ -3,6 +3,7 @@
 // exactly (names, dates, amounts, products) and falls back to the draft if a rewrite loses one.
 
 import { chat } from "../harness/llm.ts";
+import { accountTypeName } from "../bank/products.ts";
 import { longDate, money } from "../util/format.ts";
 import type { CustomerAct, CustomerScript, Goal } from "./types.ts";
 
@@ -29,7 +30,11 @@ function spoken(field: string, value: string | number): string {
 function goalSentence(goal: Goal): string {
   switch (goal.action) {
     case "open_account":
-      return `I'd like to open a ${goal.product} account and fund it with ${money(goal.amount)} from my ${goal.funding_account} account.`;
+      return goal.pickedByAgent
+        ? `I have ${money(goal.amount)} to put into a ${accountTypeName(goal.pickedByAgent.accountType)} account. Which of your ` +
+            `${accountTypeName(goal.pickedByAgent.accountType)} accounts would pay me the most interest over a year on that, not ` +
+            `counting any bonuses? I'd like to open that one, funded from my ${goal.funding_account} account.`
+        : `I'd like to open a ${goal.product} account and fund it with ${money(goal.amount)} from my ${goal.funding_account} account.`;
     case "refund_fee":
       return (
         `I was charged a ${money(goal.amount)} monthly fee on ${longDate(goal.date)} on my ${goal.account} account. ` +
@@ -50,7 +55,7 @@ function goalSentence(goal: Goal): string {
 function goalValues(goal: Goal): string[] {
   switch (goal.action) {
     case "open_account":
-      return [goal.product, money(goal.amount), goal.funding_account];
+      return goal.pickedByAgent ? [money(goal.amount), goal.funding_account] : [goal.product, money(goal.amount), goal.funding_account];
     case "refund_fee":
       return [goal.account, money(goal.amount), longDate(goal.date)];
     case "report_transaction":

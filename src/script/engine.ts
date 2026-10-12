@@ -53,7 +53,9 @@ const same = (a: unknown, b: unknown) =>
 function details(goal: Goal): [string, string | number][] {
   switch (goal.action) {
     case "open_account":
-      return [["product", goal.product], ["amount", goal.amount], ["funding_account", goal.funding_account]];
+      return goal.pickedByAgent
+        ? [["amount", goal.amount], ["funding_account", goal.funding_account]]
+        : [["product", goal.product], ["amount", goal.amount], ["funding_account", goal.funding_account]];
     case "refund_fee":
     case "report_transaction":
       return [["account", goal.account], ["amount", goal.amount]];
@@ -67,7 +69,9 @@ function details(goal: Goal): [string, string | number][] {
 // The product or account the goal is about, if any.
 const subject = (goal: Goal): string | undefined =>
   goal.action === "open_account"
-    ? goal.product
+    ? goal.pickedByAgent
+      ? undefined
+      : goal.product
     : goal.action === "request_service" || goal.action === "transfer_funds"
       ? undefined
       : goal.account;

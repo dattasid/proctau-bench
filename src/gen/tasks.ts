@@ -12,8 +12,8 @@ import { hashDatabase } from "../util/hash.ts";
 import { transfer } from "../bank/ledger.ts";
 import { createRng } from "../util/rng.ts";
 import type { Rng } from "../util/rng.ts";
-import { allProducts, productsOf, requiredAccountName } from "../bank/products.ts";
-import { courtesyReversalsInYear, requirementMatches, transferLimited } from "../bank/rules.ts";
+import { accountTypeName, allProducts, productsOf, requiredAccountName } from "../bank/products.ts";
+import { annualInterestCents, courtesyReversalsInYear, meetsRequirements, requirementMatches, transferLimited } from "../bank/rules.ts";
 import type { BankConfig, Product, Requirement } from "../bank/schema.ts";
 import { createSession } from "../env/session.ts";
 import type { TraceRecord } from "../env/session.ts";
@@ -47,8 +47,13 @@ export interface Task {
 interface TaskTemplate {
   id: string;
   applies(config: BankConfig): boolean;
-  build(rng: Rng, bank: Bank): Task;
+  // null: this bank can't support a sensible task of this kind after all (a template's own errors
+  // still throw).
+  build(rng: Rng, bank: Bank): Task | null;
 }
+
+// Marks an attempt that failed because the bank can't support the task, not because of a bug.
+class Infeasible extends Error {}
 
 // Kept apart from the background names so find_customer returns a single match.
 const FIXTURE_NAMES = [
@@ -221,6 +226,16 @@ function satisfiedFrom(config: BankConfig, db: Database, customerId: string, r: 
     .map((a) => a.openedOn)
     .sort();
   return addDays(opened[0]!, r.minAgeDays);
+}
+
+// The task, or null when every attempt found the bank can't support it.
+function orNothing(build: () => Task): Task | null {
+  try {
+    return build();
+  } catch (e) {
+    if (e instanceof Infeasible) return null;
+    throw e;
+  }
 }
 
 // Tries `attempts` in order and returns the first task that builds; throws the last error if none does.
@@ -851,6 +866,104 @@ const transferOverLimit: TaskTemplate = {
   },
 };
 
+// ---- Recommending a product
+
+// Account types with at least two interest-bearing products, the ones worth comparing.
+const interestTypes = (config: BankConfig) =>
+  config.accountTypes.filter((t) => productsOf(config, t).filter((p) => p.interest.structure !== "none").length >= 2);
+
+// The customer has an amount to put away and asks which account of one type would pay the most
+// interest in a year on it (no bonuses), then wants it opened. The agent must work out each
+// product's interest, including tiered and marginal rates, and leave out products the customer
+// can't open: a requirement they don't meet, or a minimum deposit above the amount. The fixture
+// retries until one product clearly wins. Gold: find_customer, verify_identity, open_account(best).
+const openBestInterest: TaskTemplate = {
+  id: "open_best_interest",
+  applies: (config) => interestTypes(config).length > 0,
+  build(rng, bank) {
+    const { config } = bank;
+    const today = config.bank.simulatedDate;
+    const tries = Array.from({ length: 12 }, () => rng.pick(interestTypes(config)));
+    return orNothing(() => firstThatBuilds(tries, (accountType) => {
+      const db = structuredClone(bank.db);
+      const customer = newCustomer(rng, db, today);
+      const amount = rng.pick([1000, 2500, 5000, 10000, 20000, 40000, 75000]) + rng.money(0, 2000, 250);
+      // A long-held first-type account to fund from; it also meets many requirements, not all.
+      const fundingProduct = productsOf(config, config.accountTypes[0]!).find((p) => p.requirements.length === 0)!;
+      const funding = addAccount(db, customer, fundingProduct.id, addDays(today, -rng.int(15, 700)), (amount + rng.money(1000, 5000, 100)) * 100);
+      chargeMonthlyFees(config, db, funding, today);
+      const candidates = productsOf(config, accountType).map((p) => {
+        const why = !meetsRequirements(config, db, customer.id, p, today)
+          ? "requirement not met"
+          : amount < p.minOpeningDeposit
+            ? "amount below the minimum opening deposit"
+            : undefined;
+        return { p, interestCents: annualInterestCents(p.interest, amount * 100), eligible: !why, why };
+      });
+      const ranked = candidates.filter((c) => c.eligible).sort((a, b) => b.interestCents - a.interestCents);
+      // Something to compare, something to open, and no near tie among what can be opened. A better
+      // product the customer can't open is welcome: it is the trap.
+      if (candidates.filter((c) => c.interestCents > 0).length < 2) throw new Infeasible(`${this.id}: fewer than two products to compare`);
+      if (ranked.length === 0) throw new Infeasible(`${this.id}: nothing the customer can open`);
+      if (ranked.length > 1 && ranked[0]!.interestCents - ranked[1]!.interestCents < 100) throw new Infeasible(`${this.id}: no clear winner`);
+      const best = ranked[0]!.p;
+      assertValid(this.id, bank, db);
+      const find = { tool: "find_customer", args: { name: customer.name } };
+      const verify = { tool: "verify_identity", args: { customerId: customer.id, dateOfBirth: customer.dateOfBirth, ssnLast4: customer.ssnLast4 } };
+      const open = { tool: "open_account", args: { customerId: customer.id, productId: best.id, initialDeposit: amount, fundingAccountId: funding.id } };
+      const goldCalls = [find, verify, open];
+      const { records, db: after } = replay(bank, db, goldCalls);
+      if (records.some((r) => r.outcome !== "executed" || r.checks.some((c) => !c.passed))) {
+        throw new Error(`${this.id}: gold calls did not all pass\n${JSON.stringify(records.map((r) => r.result))}`);
+      }
+      const typeName = accountTypeName(accountType);
+      return {
+        id: `${this.id}:${bank.seed}`,
+        template: this.id,
+        bankSeed: bank.seed,
+        db,
+        user: {
+          instructions:
+            `You are ${customer.name}. You have ${money(amount)} to put into a ${typeName} account and want the one that would ` +
+            `pay you the most interest over a year on that amount, not counting any bonuses. You don't know which one that is: ask ` +
+            `the agent, and open the one they recommend, funded from your ${fundingProduct.displayName} account. ` +
+            `${identityLine(customer)} You do not know any account numbers. Confirm the details when the agent asks. Once ` +
+            "the account is open, thank the agent and end the conversation. Do not ask about anything else.",
+        },
+        script: {
+          name: customer.name,
+          knows: {
+            full_name: customer.name,
+            date_of_birth: customer.dateOfBirth,
+            ssn_last4: customer.ssnLast4,
+            amount,
+            funding_account: fundingProduct.displayName,
+          },
+          goal: {
+            action: "open_account",
+            product: best.displayName,
+            amount,
+            funding_account: fundingProduct.displayName,
+            pickedByAgent: { accountType, criterion: "most_interest" },
+          },
+          reactions: { alternative: ["confirm"] }, // a recommendation is what the customer asked for
+          expectedEnding: "account_opened",
+          truth: {
+            kind: "best_product",
+            amount,
+            best: best.displayName,
+            candidates: candidates.map((c) => ({ product: c.p.displayName, interestCents: c.interestCents, eligible: c.eligible, ...(c.why ? { why: c.why } : {}) })),
+          },
+        },
+        intended: best.requirements.length > 0 ? [{ rule: "product.eligibility", passed: true }] : [],
+        goldCalls,
+        planted: [],
+        goldHash: hashDatabase(after),
+      };
+    }));
+  },
+};
+
 export const TEMPLATES: TaskTemplate[] = [
   openAccountEligible,
   openAccountTooNew,
@@ -861,6 +974,7 @@ export const TEMPLATES: TaskTemplate[] = [
   requestOutOfScope,
   transferBetweenAccounts,
   transferOverLimit,
+  openBestInterest,
 ];
 
 // ---- Modifiers: changes any task can carry on top of its template.
@@ -905,6 +1019,7 @@ export function buildTasks(bank: Bank, variant = 0, options: BuildOptions = {}):
   return TEMPLATES.flatMap((t, i) => {
     if (!t.applies(bank.config)) return [];
     let task = t.build(createRng(bank.seed, 100 + i + 1000 * variant), bank);
+    if (!task) return [];
     if (variant > 0) task = { ...task, id: `${task.id}:${variant}` };
     const modifiers = createRng(bank.seed, 500 + i + 1000 * variant);
     if (modifiers.bool(rate)) task = withWrongIdentity(modifiers, task);

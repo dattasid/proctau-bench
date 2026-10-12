@@ -9,6 +9,9 @@ export interface OpenGoal {
   product: string; // display name
   amount: number; // dollars
   funding_account: string; // display name of the customer's account
+  // The customer asks the agent to pick the product by this criterion and doesn't know which one
+  // it is: any product the agent proposes is accepted, and `product` is only the right answer.
+  pickedByAgent?: { accountType: string; criterion: "most_interest" };
 }
 
 export interface RefundGoal {
@@ -102,7 +105,7 @@ export interface CustomerScript {
   expectedEnding: "account_opened" | "refused_with_date" | "fee_refunded" | "transferred" | "funds_moved" | "refused";
   // What is actually true, for checking what the agent mentions. Written by the template, which built
   // the situation and so knows it.
-  truth: OpeningTruth | FeeTruth | HandoverTruth | TransferTruth;
+  truth: OpeningTruth | FeeTruth | HandoverTruth | TransferTruth | BestTruth;
 }
 
 export interface OpeningTruth {
@@ -112,6 +115,15 @@ export interface OpeningTruth {
   unmet?: { required_account: string; min_age_days: number };
   eligible_date?: string;
   min_deposit: number;
+}
+
+export interface BestTruth {
+  kind: "best_product";
+  amount: number;
+  best: string; // display name
+  // Every product of the type, with its year's interest on the amount (no bonuses) and whether the
+  // customer could open it now.
+  candidates: { product: string; interestCents: number; eligible: boolean; why?: string }[];
 }
 
 export interface TransferTruth {
