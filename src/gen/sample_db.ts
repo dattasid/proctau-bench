@@ -5,7 +5,7 @@
 import { addDays, addMonths, daysBetween, monthOf, monthStart } from "../util/dates.ts";
 import type { Rng } from "../util/rng.ts";
 import { productsOf, tierRank } from "../bank/products.ts";
-import { courtesyReversalsInYear, monthlyFeeDue } from "../bank/rules.ts";
+import { courtesyReversalsInYear, monthlyFeeDue, requirementMatches } from "../bank/rules.ts";
 import type { AccountType, BankConfig, Product } from "../bank/schema.ts";
 import type { Account, Customer, Database, Transaction, TransactionKind } from "../bank/state.ts";
 import { at, SPEC } from "./spec.ts";
@@ -42,7 +42,7 @@ function startingBalanceCents(rng: Rng, BG: Background, types: Types, config: Ba
 function pickProduct(rng: Rng, types: Types, config: BankConfig, accountType: AccountType, openedOn: string, planned: Planned[]): Product | null {
   const qualifies = (p: Product) =>
     p.requirements.every((r) =>
-      planned.some((a) => config.products[a.productId]!.accountType === r.accountType && daysBetween(a.openedOn, openedOn) >= r.minAgeDays),
+      planned.some((a) => requirementMatches(config, a.productId, r) && daysBetween(a.openedOn, openedOn) >= r.minAgeDays),
     );
   const candidates = productsOf(config, accountType).filter(qualifies);
   if (candidates.length === 0) return null;
@@ -57,14 +57,22 @@ function pickProduct(rng: Rng, types: Types, config: BankConfig, accountType: Ac
 
 function planAccounts(rng: Rng, BG: Background, types: Types, config: BankConfig, customerId: string, today: string): Planned[] {
   const planned: Planned[] = [];
+  // Accounts are opened in type order, each no older than the one before, so an account a later
+  // type requires usually exists early enough.
+  let maxAge: number = BG.accountAgeDays[1];
   const plan = (accountType: AccountType) => {
-    const openedOn = addDays(today, -rng.int(...BG.accountAgeDays));
+    const age = rng.int(BG.accountAgeDays[0], Math.max(BG.accountAgeDays[0], maxAge));
+    const openedOn = addDays(today, -age);
     const product = pickProduct(rng, types, config, accountType, openedOn, planned);
-    if (product) planned.push({ customerId, productId: product.id, openedOn, status: "open", balanceCents: 0 });
+    if (!product) return;
+    planned.push({ customerId, productId: product.id, openedOn, status: "open", balanceCents: 0 });
+    maxAge = age;
   };
   for (const t of config.accountTypes) {
     if ((t === BG.fallbackAccountType && planned.length === 0) || rng.bool(types[t]!.background.holdChance)) plan(t);
   }
+  // The first product (lowest tier of the first type) can never have requirements.
+  if (planned.length === 0) plan(config.accountTypes[0]!);
   return planned;
 }
 

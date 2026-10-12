@@ -1,7 +1,7 @@
 // Looking up a bank's products by account type and tier. Products are always listed in
 // account type order, then tier order from lowest to highest.
 
-import type { AccountType, BankConfig, Product, ProductId, Tier } from "./schema.ts";
+import type { AccountType, BankConfig, Product, ProductId, Requirement, Tier } from "./schema.ts";
 
 // How customers and documents say an account type: "business_checking" -> "business checking".
 export function accountTypeName(accountType: AccountType): string {
@@ -28,6 +28,11 @@ export function allProducts(config: BankConfig): Product[] {
 
 export function productIds(config: BankConfig): ProductId[] {
   return config.accountTypes.flatMap((t) => config.tiers.map((tier) => productId(t, tier)));
+}
+
+// What a requirement asks the customer to hold, as customers say it: "checking" or "Gold Checking".
+export function requiredAccountName(config: BankConfig, r: Requirement): string {
+  return r.kind === "holds_product" ? config.products[r.productId]!.displayName : accountTypeName(r.accountType);
 }
 
 // 0 for the lowest tier, 1 for the highest; 0 when there is only one tier.

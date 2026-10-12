@@ -3,7 +3,7 @@
 // Amounts the agent sends and sees are dollars; the database stores cents.
 
 import { postTransaction, transfer } from "../bank/ledger.ts";
-import { productIds } from "../bank/products.ts";
+import { productIds, requiredAccountName } from "../bank/products.ts";
 import { courtesyReversalsInYear, evaluateWaiver, requirementMet } from "../bank/rules.ts";
 import type { BankConfig } from "../bank/schema.ts";
 import { nextId } from "../bank/state.ts";
@@ -205,7 +205,7 @@ export const TOOLS: Tool[] = [
       );
       if (product.requirements.length > 0) {
         const unmet = product.requirements.filter((r) => !requirementMet(s.config, s.db, customerId, r, s.now));
-        const detail = unmet.length === 0 ? "eligible" : unmet.map((r) => `no ${r.accountType} account held ${r.minAgeDays}+ days`).join("; ");
+        const detail = unmet.length === 0 ? "eligible" : unmet.map((r) => `no ${requiredAccountName(s.config, r)} account held ${r.minAgeDays}+ days`).join("; ");
         checks.push(policy("product.eligibility", unmet.length === 0, detail));
       }
       return {

@@ -12,10 +12,11 @@ import { hashDatabase } from "../util/hash.ts";
 import { createRng } from "../util/rng.ts";
 import type { Rng } from "../util/rng.ts";
 import { allProducts, productsOf } from "../bank/products.ts";
+import { requirementMatches } from "../bank/rules.ts";
 import type { BankConfig, Product, Requirement } from "../bank/schema.ts";
 import { createSession } from "../env/session.ts";
 import type { TraceRecord } from "../env/session.ts";
-import type { Customer, Database } from "../bank/state.ts";
+import type { Account, Customer, Database } from "../bank/state.ts";
 import { validateDatabase } from "../bank/validate_db.ts";
 
 export interface ExpectedCall {
@@ -31,6 +32,7 @@ export interface Task {
   user: { instructions: string }; // private to the user simulator
   intended: { rule: string; passed: boolean }[]; // the rule branch this task targets
   goldCalls: ExpectedCall[]; // one correct sequence; others may be equally valid
+  forbiddenCalls?: ExpectedCall[]; // calls that break the targeted rule, replayed to confirm the task hits it
   goldHash: string; // database hash after a correct conversation
 }
 
@@ -83,113 +85,166 @@ function assertValid(template: string, bank: Bank, db: Database): void {
   if (errors.length > 0) throw new Error(`${template}: fixture breaks the database\n  ${errors.join("\n  ")}`);
 }
 
-// The product an account-opening task targets and the account its customer already holds.
-// Prefers a product with a holds_account requirement; otherwise the top tier of the last account
-// type. The held account is the requirement's account type (the first account type when there is
-// none), at a tier that has no requirements of its own so the fixture can always hold it.
-interface OpeningTarget {
-  product: Product;
-  requirement: Requirement | null;
-  held: Product;
+// Products an account-opening task can target: every product with requirements, or the top tier
+// of the last account type when the bank has none.
+function openingTargets(config: BankConfig): Product[] {
+  const restricted = allProducts(config).filter((p) => p.requirements.length > 0);
+  return restricted.length > 0 ? restricted : [productsOf(config, config.accountTypes.at(-1)!).at(-1)!];
 }
 
-function openingTargets(config: BankConfig): OpeningTarget[] {
-  const restricted = allProducts(config).flatMap((product) =>
-    product.requirements.filter((r) => r.kind === "holds_account").map((requirement) => ({ product, requirement })),
-  );
-  const candidates = restricted.length > 0
-    ? restricted
-    : [{ product: productsOf(config, config.accountTypes.at(-1)!).at(-1)!, requirement: null as Requirement | null }];
-  return candidates.flatMap(({ product, requirement }) => {
-    const held = productsOf(config, requirement?.accountType ?? config.accountTypes[0]!).find((p) => p.requirements.length === 0);
-    return held ? [{ product, requirement, held }] : [];
+function shuffled<T>(rng: Rng, items: T[]): T[] {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = rng.int(0, i);
+    [out[i], out[j]] = [out[j]!, out[i]!];
+  }
+  return out;
+}
+
+// A product whose account satisfies `r`, preferring one that would not also satisfy `avoid`.
+function satisfierOf(rng: Rng, config: BankConfig, r: Requirement, avoid: Requirement | null): Product {
+  const all = r.kind === "holds_product" ? [config.products[r.productId]!] : productsOf(config, r.accountType);
+  const preferred = all.filter((p) => !avoid || r === avoid || !requirementMatches(config, p.id, avoid));
+  return rng.pick(preferred.length > 0 ? preferred : all);
+}
+
+// Opens an account for each of `product`'s requirements, early enough before `on` to count, except
+// `tooNew`, which is opened too recently; no other account, at any depth, should satisfy it. Each
+// account gets its own prerequisites first, all the way down; requirements only point to earlier
+// products, so this ends. The first account also gets `extraCents`. Returns the accounts for
+// `product`'s own requirements, in order.
+function holdPrerequisites(
+  rng: Rng,
+  config: BankConfig,
+  db: Database,
+  customer: Customer,
+  product: Product,
+  on: string,
+  tooNew: Requirement | null,
+  avoid: Requirement | null,
+  extraCents: number,
+): Account[] {
+  return product.requirements.map((r, i) => {
+    const held = satisfierOf(rng, config, r, avoid);
+    const openedOn = addDays(on, -(r === tooNew ? rng.int(1, r.minAgeDays - 1) : r.minAgeDays + rng.int(5, 90)));
+    holdPrerequisites(rng, config, db, customer, held, openedOn, null, avoid, 0);
+    const cents = (held.minOpeningDeposit + rng.money(2000, 6000, 100)) * 100 + (i === 0 ? extraCents : 0);
+    return addAccount(db, customer, held.id, openedOn, cents);
   });
 }
 
-// A customer holding `target.held`, opened `ageDays` ago, who wants `target.product` funded from it.
-function openingFixture(rng: Rng, bank: Bank, target: OpeningTarget, ageDays: number) {
+// A customer who wants `target`, funded from the account for its first requirement (or from an
+// account of the first type's lowest tier when it has none), with every prerequisite in place
+// except `tooNew`.
+function openingFixture(rng: Rng, bank: Bank, target: Product, tooNew: Requirement | null) {
   const { config } = bank;
   const today = config.bank.simulatedDate;
   const db = structuredClone(bank.db);
   const customer = newCustomer(rng, db, today);
   // Always positive: a $0 deposit is not a valid call, and a minimum can be $0 on unordered banks.
-  const deposit = target.product.minOpeningDeposit + rng.money(500, 3500, 500);
-  const funding = addAccount(db, customer, target.held.id, addDays(today, -ageDays), (deposit + rng.money(500, 5000, 100)) * 100);
-  chargeMonthlyFees(config, db, funding, today);
+  const deposit = target.minOpeningDeposit + rng.money(500, 3500, 500);
+  const fundCents = (deposit + rng.money(500, 5000, 100)) * 100;
+  const funding =
+    target.requirements.length > 0
+      ? holdPrerequisites(rng, config, db, customer, target, today, tooNew, tooNew, fundCents)[0]!
+      : addAccount(db, customer, productsOf(config, config.accountTypes[0]!)[0]!.id, addDays(today, -rng.int(30, 400)), fundCents);
+  for (const a of Object.values(db.accounts)) if (a.customerId === customer.id) chargeMonthlyFees(config, db, a, today);
+  const fundingProduct = config.products[funding.productId]!;
   const verify = { tool: "verify_identity", args: { customerId: customer.id, dateOfBirth: customer.dateOfBirth, ssnLast4: customer.ssnLast4 } };
   const open = {
     tool: "open_account",
-    args: { customerId: customer.id, productId: target.product.id, initialDeposit: deposit, fundingAccountId: funding.id },
+    args: { customerId: customer.id, productId: target.id, initialDeposit: deposit, fundingAccountId: funding.id },
   };
   const want =
-    `You are ${customer.name}. You want to open a ${target.product.displayName} account ` +
-    `and fund it with ${money(deposit)} from your ${target.held.displayName} account. ` +
+    `You are ${customer.name}. You want to open a ${target.displayName} account ` +
+    `and fund it with ${money(deposit)} from your ${fundingProduct.displayName} account. ` +
     `${identityLine(customer)} You do not know any account numbers.`;
   return { db, customer, funding, deposit, verify, open, want, find: { tool: "find_customer", args: { name: customer.name } } };
+}
+
+// Tries `attempts` in order and returns the first task that builds; throws the last error if none does.
+function firstThatBuilds<T>(attempts: T[], build: (a: T) => Task): Task {
+  let last: unknown = new Error("nothing to try");
+  for (const a of attempts) {
+    try {
+      return build(a);
+    } catch (e) {
+      last = e;
+    }
+  }
+  throw last;
 }
 
 const openAccountEligible: TaskTemplate = {
   id: "open_account_eligible",
   applies: (config) => openingTargets(config).length > 0,
   build(rng, bank) {
-    const target = rng.pick(openingTargets(bank.config));
-    const ageDays = (target.requirement?.minAgeDays ?? 0) + rng.int(5, 300);
-    const f = openingFixture(rng, bank, target, ageDays);
-    assertValid(this.id, bank, f.db);
-    const goldCalls = [f.find, f.verify, f.open];
-    const { records, db } = replay(bank, f.db, goldCalls);
-    const intended = target.requirement ? [{ rule: "product.eligibility", passed: true }] : [];
-    if (records.some((r) => r.outcome !== "executed" || r.checks.some((c) => !c.passed))) {
-      throw new Error(`${this.id}: gold calls did not all pass\n${JSON.stringify(records.map((r) => r.result))}`);
-    }
-    assertIntent(this.id, records[2]!, intended);
-    return {
-      id: `${this.id}:${bank.seed}`,
-      template: this.id,
-      bankSeed: bank.seed,
-      db: f.db,
-      user: {
-        instructions:
-          `${f.want} Confirm the details when the agent asks. Once the account is open, thank the agent and end the conversation. ` +
-          "If the agent says it cannot open the account, ask why once, then end the conversation. Do not ask about anything else.",
-      },
-      intended,
-      goldCalls,
-      goldHash: hashDatabase(db),
-    };
+    // Another target is tried when a fixture comes out invalid, e.g. a long chain whose fees run
+    // an account dry.
+    return firstThatBuilds(shuffled(rng, openingTargets(bank.config)), (target) => {
+      const f = openingFixture(rng, bank, target, null);
+      assertValid(this.id, bank, f.db);
+      const goldCalls = [f.find, f.verify, f.open];
+      const { records, db } = replay(bank, f.db, goldCalls);
+      const intended = target.requirements.length > 0 ? [{ rule: "product.eligibility", passed: true }] : [];
+      if (records.some((r) => r.outcome !== "executed" || r.checks.some((c) => !c.passed))) {
+        throw new Error(`${this.id}: gold calls did not all pass\n${JSON.stringify(records.map((r) => r.result))}`);
+      }
+      assertIntent(this.id, records[2]!, intended);
+      return {
+        id: `${this.id}:${bank.seed}`,
+        template: this.id,
+        bankSeed: bank.seed,
+        db: f.db,
+        user: {
+          instructions:
+            `${f.want} Confirm the details when the agent asks. Once the account is open, thank the agent and end the conversation. ` +
+            "If the agent says it cannot open the account, ask why once, then end the conversation. Do not ask about anything else.",
+        },
+        intended,
+        goldCalls,
+        goldHash: hashDatabase(db),
+      };
+    });
   },
 };
 
-// Targets whose requirement can be failed by holding the account for too short a time.
-const tooNewTargets = (config: BankConfig) => openingTargets(config).filter((t) => (t.requirement?.minAgeDays ?? 0) >= 2);
+// Requirements that can be failed by holding the account for too short a time.
+const tooNewTargets = (config: BankConfig) =>
+  openingTargets(config).flatMap((product) => product.requirements.filter((r) => r.minAgeDays >= 2).map((requirement) => ({ product, requirement })));
 
 const openAccountTooNew: TaskTemplate = {
   id: "open_account_held_too_briefly",
   applies: (config) => tooNewTargets(config).length > 0,
   build(rng, bank) {
-    const target = rng.pick(tooNewTargets(bank.config));
-    const f = openingFixture(rng, bank, target, rng.int(1, target.requirement!.minAgeDays - 1));
-    assertValid(this.id, bank, f.db);
-    const goldCalls = [f.find, f.verify];
-    const { records, db } = replay(bank, f.db, goldCalls);
-    if (records.some((r) => r.outcome !== "executed")) throw new Error(`${this.id}: gold calls failed`);
-    // Probe the call the agent must not make, to confirm the fixture hits the rule.
-    const intended = [{ rule: "product.eligibility", passed: false }];
-    assertIntent(this.id, replay(bank, f.db, [...goldCalls, f.open]).records[2]!, intended);
-    return {
-      id: `${this.id}:${bank.seed}`,
-      template: this.id,
-      bankSeed: bank.seed,
-      db: f.db,
-      user: {
-        instructions:
-          `${f.want} If the agent says you are not eligible yet, ask when you will become eligible; once you have an answer, ` +
-          "end the conversation. If the agent offers a different account instead, decline. Do not ask about anything else.",
-      },
-      intended,
-      goldCalls,
-      goldHash: hashDatabase(db),
-    };
+    // Another target, or another try at the same one, when the fixture still meets the requirement:
+    // an older prerequisite of another requirement can count for it too.
+    const targets = shuffled(rng, tooNewTargets(bank.config));
+    return firstThatBuilds([...targets, ...targets, ...targets], ({ product, requirement }) => {
+      const f = openingFixture(rng, bank, product, requirement);
+      assertValid(this.id, bank, f.db);
+      const goldCalls = [f.find, f.verify];
+      const { records, db } = replay(bank, f.db, goldCalls);
+      if (records.some((r) => r.outcome !== "executed")) throw new Error(`${this.id}: gold calls failed`);
+      // Probe the call the agent must not make, to confirm the fixture hits the rule.
+      const intended = [{ rule: "product.eligibility", passed: false }];
+      assertIntent(this.id, replay(bank, f.db, [...goldCalls, f.open]).records[2]!, intended);
+      return {
+        id: `${this.id}:${bank.seed}`,
+        template: this.id,
+        bankSeed: bank.seed,
+        db: f.db,
+        user: {
+          instructions:
+            `${f.want} If the agent says you are not eligible yet, ask when you will become eligible; once you have an answer, ` +
+            "end the conversation. If the agent offers a different account instead, decline. Do not ask about anything else.",
+        },
+        intended,
+        goldCalls,
+        forbiddenCalls: [f.open],
+        goldHash: hashDatabase(db),
+      };
+    });
   },
 };
 

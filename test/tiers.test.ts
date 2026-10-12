@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { productsOf } from "../src/bank/products.ts";
+import { accountTypeTitle, productsOf } from "../src/bank/products.ts";
 import { callTool, toolList } from "../src/env/executor.ts";
 import { createSession } from "../src/env/session.ts";
 import { generateBank } from "../src/gen/generate.ts";
@@ -23,7 +23,7 @@ describe("three tiers", () => {
     for (const { bank, errors } of banks) assert.ok(bank, errors.join("; "));
     const config = banks[0]!.bank!.config;
     assert.deepEqual(config.tiers, ["basic", "plus", "premium"]);
-    assert.equal(Object.keys(config.products).length, 6);
+    assert.equal(Object.keys(config.products).length, 3 * config.accountTypes.length);
     assert.ok(banks[0]!.bank!.docs.some((d) => d.path === "products/savings_plus.md"));
   });
 
@@ -40,7 +40,7 @@ describe("three tiers", () => {
   it("offers every product to open_account and holds background accounts in every tier", () => {
     const config = banks[0]!.bank!.config;
     const open = toolList(config).find((t) => t.name === "open_account")!;
-    assert.equal((open.parameters.properties.productId as { enum: string[] }).enum.length, 6);
+    assert.equal((open.parameters.properties.productId as { enum: string[] }).enum.length, 3 * config.accountTypes.length);
     const held = new Set(banks.flatMap(({ bank }) => Object.values(bank!.db.accounts).map((a) => a.productId)));
     for (const id of Object.keys(config.products)) assert.ok(held.has(id), `no background account in ${id}`);
   });
@@ -73,7 +73,7 @@ describe("five tiers", () => {
     for (const { bank, errors } of banks) assert.ok(bank, errors.join("; "));
     for (const { bank } of banks) {
       for (const t of bank!.config.accountTypes) {
-        const names = productsOf(bank!.config, t).map((p) => p.displayName.split(" ").slice(0, -1).join(" "));
+        const names = productsOf(bank!.config, t).map((p) => p.displayName.slice(0, -accountTypeTitle(t).length - 1));
         assert.ok(SPEC.bank.nameLadders.some((l) => l.names.join() === names.join()), `seed ${bank!.seed}: ${names}`);
       }
     }

@@ -5,7 +5,7 @@
 import { annualInterestCents } from "../bank/rules.ts";
 import { days, money, moneyCents, percent, times } from "../util/format.ts";
 import type { Rng } from "../util/rng.ts";
-import { accountTypeName, allProducts, productsOf, tierRank } from "../bank/products.ts";
+import { accountTypeName, allProducts, productsOf, requiredAccountName, tierRank } from "../bank/products.ts";
 import type { BankConfig, InterestBonus, Product, Requirement, WaiverCondition } from "../bank/schema.ts";
 
 export interface Doc {
@@ -92,19 +92,17 @@ function interestText(p: Product, say: Say): string {
   return bonuses.length > 0 ? `${text}\n\n${bonuses.join("\n\n")}` : text;
 }
 
-function requirementText(r: Requirement): string {
-  switch (r.kind) {
-    case "holds_account":
-      return r.minAgeDays === 0
-        ? `already hold an open ${accountTypeName(r.accountType)} account with us`
-        : `have held an open ${accountTypeName(r.accountType)} account with us for at least ${days(r.minAgeDays)}, ` +
-            `counted from the date that account was opened to today`;
-  }
+function requirementText(config: BankConfig, r: Requirement): string {
+  const name = requiredAccountName(config, r);
+  return r.minAgeDays === 0
+    ? `already hold an open ${name} account with us`
+    : `have held an open ${name} account with us for at least ${days(r.minAgeDays)}, ` +
+        `counted from the date that account was opened to today`;
 }
 
 // Empty for a product anyone may open.
-function eligibilityText(p: Product): string {
-  const items = p.requirements.map(requirementText);
+function eligibilityText(config: BankConfig, p: Product): string {
+  const items = p.requirements.map((r) => requirementText(config, r));
   if (items.length === 0) return "";
   if (items.length === 1) return `To open ${p.displayName}, the customer must ${items[0]}.`;
   return `To open ${p.displayName}, the customer must meet all of the following:\n\n${items.map((i) => `- ${i}`).join("\n")}`;
@@ -134,7 +132,7 @@ function productSheet(config: BankConfig, p: Product, say: Say): Doc {
     p.minOpeningDeposit > 0
       ? `The minimum opening deposit is ${money(p.minOpeningDeposit)}.`
       : "There is no minimum opening deposit.";
-  const eligibility = eligibilityText(p);
+  const eligibility = eligibilityText(config, p);
   const extra = eligibility ? `\n\n${eligibility}` : "";
   return {
     path: `products/${p.id}.md`,
@@ -187,7 +185,7 @@ function interestDoc(config: BankConfig, say: Say): Doc {
 function eligibilitySection(config: BankConfig): string {
   const restricted = allProducts(config).filter((p) => p.requirements.length > 0);
   if (restricted.length === 0) return "Any verified customer may open any of our accounts; no other account is required.";
-  return `${restricted.map(eligibilityText).join("\n\n")}\n\nThe other accounts have no eligibility requirements.`;
+  return `${restricted.map((p) => eligibilityText(config, p)).join("\n\n")}\n\nThe other accounts have no eligibility requirements.`;
 }
 
 function openingDoc(config: BankConfig): Doc {

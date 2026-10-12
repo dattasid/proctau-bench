@@ -65,15 +65,8 @@ describe("REST server", () => {
       if (!task) continue;
       const env = await EnvClient.create(baseUrl, bank!.config, task.db);
       for (const call of task.goldCalls) await env.call(call.tool, call.args);
-      const customerId = task.goldCalls[1]!.args.customerId as string;
-      const funding = Object.values(task.db.accounts).find((a) => a.customerId === customerId)!;
-      const target = Object.values(bank!.config.products).find((p) => p.requirements.length > 0)!;
-      const r = await env.call("open_account", {
-        customerId,
-        productId: target.id,
-        initialDeposit: Math.max(target.minOpeningDeposit, 100),
-        fundingAccountId: funding.id,
-      });
+      const forbidden = task.forbiddenCalls![0]!;
+      const r = await env.call(forbidden.tool, forbidden.args);
       const { hash } = await env.state();
       const e = evaluate(task, (await env.trace()).trace, hash, "user_stop");
       assert.equal(e.pass, false);

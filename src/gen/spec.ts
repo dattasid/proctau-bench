@@ -22,6 +22,7 @@ export function at(o: Odds, rank: number): number {
 // every higher tier adds a step to the tier below, so it dominates by construction.
 // The key in SPEC.accountTypes is the type's name; customers see it with underscores as spaces.
 export interface AccountTypeSpec {
+  presence: number; // chance a bank offers this type; a type whose required type is missing is left out
   minOpeningDeposit: { anchor: Range; step: Range };
   fee: { anchor: Range; step: Range; free: Odds };
   waiver: {
@@ -55,6 +56,7 @@ export interface AccountTypeSpec {
 // In order: a product may only require account types listed before its own.
 const ACCOUNT_TYPES: Record<AccountType, AccountTypeSpec> = {
   checking: {
+    presence: 1,
     minOpeningDeposit: { anchor: [0, 100, 25], step: [500, 5000, 500] },
     fee: { anchor: [5, 15, 1], step: [5, 20, 1], free: { bottom: 0, top: 0 } },
     waiver: { kinds: ["min_balance", "direct_deposit", "senior"], minBalance: [500, 2500, 250], minBalanceGrowth: 10 },
@@ -77,6 +79,7 @@ const ACCOUNT_TYPES: Record<AccountType, AccountTypeSpec> = {
     },
   },
   savings: {
+    presence: 1,
     minOpeningDeposit: { anchor: [0, 100, 25], step: [1000, 10000, 500] },
     fee: { anchor: [2, 5, 1], step: [8, 20, 1], free: { bottom: 0.4, top: 0 } },
     waiver: { kinds: ["min_balance", "linked_account", "senior"], minBalance: [300, 1500, 100], minBalanceGrowth: 15 },
@@ -96,6 +99,52 @@ const ACCOUNT_TYPES: Record<AccountType, AccountTypeSpec> = {
       payroll: false,
       spending: false,
       receivesTransfers: true,
+    },
+  },
+  business_checking: {
+    presence: 0.5,
+    minOpeningDeposit: { anchor: [100, 500, 50], step: [1000, 5000, 500] },
+    fee: { anchor: [10, 25, 1], step: [10, 30, 1], free: { bottom: 0, top: 0 } },
+    waiver: { kinds: ["min_balance", "linked_account"], minBalance: [2000, 10000, 500], minBalanceGrowth: 6 },
+    interest: {
+      none: { bottom: 0.8, top: 0.2 },
+      floor: 0,
+      spread: [0.01, 0.1, 0.01],
+      gapAboveBelow: [0.05, 0.5, 0.05],
+      tiered: { bottom: 0, top: 0 },
+    },
+    bonus: { chance: { bottom: 0, top: 0 }, linkTo: null },
+    requirement: { chance: { bottom: 1, top: 1 }, accountType: "checking", minAgeDays: [0, 30, 90] },
+    background: {
+      holdChance: 0.5,
+      tierWeight: { bottom: 0.6, top: 0.4 },
+      startingBalanceMax: { bottom: 20000, top: 80000 },
+      payroll: false,
+      spending: false,
+      receivesTransfers: false,
+    },
+  },
+  business_savings: {
+    presence: 0.7, // of banks with business checking
+    minOpeningDeposit: { anchor: [500, 2000, 100], step: [2000, 10000, 500] },
+    fee: { anchor: [5, 10, 1], step: [10, 20, 1], free: { bottom: 0.2, top: 0 } },
+    waiver: { kinds: ["min_balance", "linked_account"], minBalance: [2500, 10000, 500], minBalanceGrowth: 8 },
+    interest: {
+      none: { bottom: 0, top: 0 },
+      floor: 0.75,
+      spread: [0, 1.5, 0.05],
+      gapAboveBelow: [0.25, 1.5, 0.05],
+      tiered: { bottom: 0.5, top: 0.7 },
+    },
+    bonus: { chance: { bottom: 0.3, top: 0.3 }, linkTo: "business_checking" },
+    requirement: { chance: { bottom: 1, top: 1 }, accountType: "business_checking", minAgeDays: [30, 60, 90] },
+    background: {
+      holdChance: 0.8,
+      tierWeight: { bottom: 0.6, top: 0.4 },
+      startingBalanceMax: { bottom: 30000, top: 120000 },
+      payroll: false,
+      spending: false,
+      receivesTransfers: false,
     },
   },
 };
@@ -132,6 +181,14 @@ export const SPEC = {
   // Banks whose tiers are sampled independently instead of stepping up (see
   // BankConfig.unorderedTiers). Belongs in a profile once profiles exist.
   unorderedTiersChance: 0.2,
+
+  // Banks whose products may also require one specific earlier product (see
+  // BankConfig.productRequirements); `chance` is per product, by tier.
+  productRequirements: {
+    bankChance: 0.25,
+    chance: { bottom: 0.2, top: 0.6 } as Odds,
+    minAgeDays: [0, 30, 60, 90] as readonly number[],
+  },
 
   // Product tiers from lowest to highest. Each account type has one product per tier.
   tiers: ["basic", "premium"] as readonly string[],
@@ -170,7 +227,7 @@ export const SPEC = {
     ageYears: [21, 85, 1],
     historyMonths: 3,
     // A customer who holds none of the earlier types always gets this one, so everyone has an
-    // account. It needs a product without requirements.
+    // account; if it has no product they qualify for, they get the bank's first product.
     fallbackAccountType: "savings" as AccountType,
     accountAgeDays: [10, 1500, 1],
     startingBalance: {

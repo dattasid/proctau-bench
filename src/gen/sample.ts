@@ -77,6 +77,7 @@ function sampleProduct(
   below: Product | null,
   name: string,
   unordered: boolean,
+  earlier: Product[] | null, // every product sampled before this one; null: no product requirements
 ): Product {
   const typeSpec: AccountTypeSpec = spec.accountTypes[accountType]!;
   const count = spec.tiers.length;
@@ -119,10 +120,14 @@ function sampleProduct(
 
   // Requirements follow the tier's real position: they say nothing about rates or fees.
   const req = typeSpec.requirement;
-  const requirements: Requirement[] =
-    req && rng.bool(at(req.chance, rankOf(position)))
-      ? [{ kind: "holds_account", accountType: req.accountType, minAgeDays: rng.pick(req.minAgeDays) }]
-      : [];
+  const requirements: Requirement[] = [];
+  if (req && rng.bool(at(req.chance, rankOf(position)))) {
+    requirements.push({ kind: "holds_account", accountType: req.accountType, minAgeDays: rng.pick(req.minAgeDays) });
+  }
+  const pr = spec.productRequirements;
+  if (earlier && earlier.length > 0 && rng.bool(at(pr.chance, rankOf(position)))) {
+    requirements.push({ kind: "holds_product", productId: rng.pick(earlier).id, minAgeDays: rng.pick(pr.minAgeDays) });
+  }
 
   const tier = spec.tiers[position]!;
   return {
@@ -147,13 +152,14 @@ function tierNames(rng: Rng, spec: Spec): string[] {
   return ladder.names.slice(offset, offset + n);
 }
 
-function sampleProducts(rng: Rng, spec: Spec, unordered: boolean): BankConfig["products"] {
+function sampleProducts(rng: Rng, spec: Spec, accountTypes: string[], unordered: boolean, productRequirements: boolean): BankConfig["products"] {
   const products: BankConfig["products"] = {};
-  for (const accountType of Object.keys(spec.accountTypes)) {
+  for (const accountType of accountTypes) {
     const names = tierNames(rng, spec);
     let below: Product | null = null;
     spec.tiers.forEach((_, position) => {
-      const p = sampleProduct(rng, spec, accountType, position, below, names[position]!, unordered);
+      const earlier = productRequirements ? Object.values(products) : null;
+      const p = sampleProduct(rng, spec, accountType, position, below, names[position]!, unordered, earlier);
       products[p.id] = p;
       below = p;
     });
@@ -169,8 +175,20 @@ function samplePolicies(rng: Rng, spec: Spec): Policies {
   };
 }
 
+// The account types this bank offers, in spec order. A type whose required type is missing is left out.
+function sampleAccountTypes(rng: Rng, spec: Spec): string[] {
+  const offered: string[] = [];
+  for (const [t, typeSpec] of Object.entries(spec.accountTypes)) {
+    const needs = typeSpec.requirement?.accountType;
+    if ((needs === undefined || offered.includes(needs)) && rng.bool(typeSpec.presence)) offered.push(t);
+  }
+  return offered;
+}
+
 export function sampleBank(rng: Rng, seed: number, spec: Spec = SPEC): BankConfig {
   const unorderedTiers = rng.bool(spec.unorderedTiersChance);
+  const accountTypes = sampleAccountTypes(rng, spec);
+  const productRequirements = rng.bool(spec.productRequirements.bankChance);
   return {
     schemaVersion: 1,
     seed,
@@ -180,8 +198,9 @@ export function sampleBank(rng: Rng, seed: number, spec: Spec = SPEC): BankConfi
     },
     unorderedTiers,
     tiers: [...spec.tiers],
-    accountTypes: Object.keys(spec.accountTypes),
-    products: sampleProducts(rng, spec, unorderedTiers),
+    accountTypes,
+    productRequirements,
+    products: sampleProducts(rng, spec, accountTypes, unorderedTiers, productRequirements),
     policies: samplePolicies(rng, spec),
   };
 }

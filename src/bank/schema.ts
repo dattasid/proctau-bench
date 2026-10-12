@@ -9,12 +9,12 @@ export type AccountType = string;
 export type Tier = string;
 export type ProductId = string;
 
-// What a customer must already have to open a product. Empty list: anyone may open it.
-export type Requirement = {
-  kind: "holds_account";
-  accountType: AccountType; // an open account of this type...
-  minAgeDays: number; // ...opened at least this many days before the new account
-};
+// What a customer must already have to open a product: an open account of an earlier account
+// type (any tier), or of one specific earlier product, opened at least minAgeDays before the new
+// account. Empty list: anyone may open it.
+export type Requirement =
+  | { kind: "holds_account"; accountType: AccountType; minAgeDays: number }
+  | { kind: "holds_product"; productId: ProductId; minAgeDays: number };
 
 export type WaiverCondition =
   | { kind: "min_balance"; amount: number; measure: "daily_minimum" | "monthly_average" }
@@ -88,6 +88,10 @@ export interface BankConfig {
   // In order: a product may only require account types listed before its own, so opening
   // requirements can never form a cycle.
   accountTypes: AccountType[];
+  // true: a product may also require one specific earlier product, even a lower tier of its own
+  // type (Gold Checking requires Silver Checking). Earlier means earlier in product order, so
+  // requirements still cannot form a cycle.
+  productRequirements: boolean;
   products: Record<ProductId, Product>;
   policies: Policies;
 }

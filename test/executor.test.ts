@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { productIds } from "../src/bank/products.ts";
 import { DECLINED, callTool, toolList } from "../src/env/executor.ts";
 import { addAccount, addCustomer, addTransaction, emptyDatabase } from "../src/gen/fixtures.ts";
 import { addDays } from "../src/util/dates.ts";
@@ -44,9 +45,11 @@ function openPremiumSavings(s: Session, customerId: string, fundingAccountId: st
 
 describe("tool list", () => {
   it("exposes every tool with a JSON schema", () => {
-    const tools = toolList(sampleBank(createRng(1), 1));
+    const config = sampleBank(createRng(1), 1);
+    const tools = toolList(config);
     const productEnum = (tools.find((t) => t.name === "open_account")!.parameters.properties.productId as { enum?: string[] }).enum;
-    assert.deepEqual(productEnum, ["checking_basic", "checking_premium", "savings_basic", "savings_premium"]);
+    assert.deepEqual(productEnum, productIds(config));
+    assert.ok(productEnum!.includes("checking_basic") && productEnum!.includes("savings_premium"));
     assert.equal(tools.length, 9);
     const open = tools.find((t) => t.name === "open_account")!;
     assert.deepEqual(open.parameters.required, ["customerId", "productId", "initialDeposit", "fundingAccountId"]);

@@ -98,19 +98,26 @@ export function courtesyReversalsInYear(db: Database, customerId: string, year: 
     .length;
 }
 
-// Whether the customer holds an open account of the required type, any tier, opened at least
-// minAgeDays before `onDate`. A closed account never qualifies, however long it was held.
-export function requirementMet(config: BankConfig, db: Database, customerId: string, r: Requirement, onDate: string): boolean {
+// Whether an account of `productId` is the kind of account `r` asks for, regardless of its age.
+export function requirementMatches(config: BankConfig, productId: string, r: Requirement): boolean {
   switch (r.kind) {
     case "holds_account":
-      return Object.values(db.accounts).some(
-        (a) =>
-          a.customerId === customerId &&
-          a.status === "open" &&
-          config.products[a.productId]?.accountType === r.accountType &&
-          daysBetween(a.openedOn, onDate) >= r.minAgeDays,
-      );
+      return config.products[productId]?.accountType === r.accountType;
+    case "holds_product":
+      return productId === r.productId;
   }
+}
+
+// Whether the customer holds an open account that `r` asks for, opened at least minAgeDays before
+// `onDate`. A closed account never qualifies, however long it was held.
+export function requirementMet(config: BankConfig, db: Database, customerId: string, r: Requirement, onDate: string): boolean {
+  return Object.values(db.accounts).some(
+    (a) =>
+      a.customerId === customerId &&
+      a.status === "open" &&
+      requirementMatches(config, a.productId, r) &&
+      daysBetween(a.openedOn, onDate) >= r.minAgeDays,
+  );
 }
 
 // Whether the customer may open `product` on `onDate`.

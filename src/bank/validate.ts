@@ -19,6 +19,7 @@ export function validateBank(config: BankConfig): string[] {
   if (config.accountTypes.length === 0) return ["no account types"];
   if (new Set(config.accountTypes).size !== config.accountTypes.length) return ["duplicate account types"];
   const typeIndex = (t: string) => config.accountTypes.indexOf(t);
+  const order = productIds(config);
   const expected = new Set(productIds(config));
   for (const id of Object.keys(config.products)) if (!expected.has(id)) err(`${id}: product for an unknown tier or account type`);
 
@@ -48,9 +49,14 @@ export function validateBank(config: BankConfig): string[] {
       }
     }
     for (const r of p.requirements) {
-      // Requirements only point to earlier account types, so they can never form a cycle.
-      if (typeIndex(r.accountType) < 0 || typeIndex(r.accountType) >= typeIndex(p.accountType)) {
+      // Requirements only point to earlier account types or earlier products, so they can never
+      // form a cycle.
+      if (r.kind === "holds_account" && (typeIndex(r.accountType) < 0 || typeIndex(r.accountType) >= typeIndex(p.accountType))) {
         err(`${id}: may only require an account type listed before ${p.accountType}`);
+      }
+      if (r.kind === "holds_product") {
+        if (!config.productRequirements) err(`${id}: requires a specific product, but the bank does not allow that`);
+        if (order.indexOf(r.productId) < 0 || order.indexOf(r.productId) >= order.indexOf(id)) err(`${id}: may only require an earlier product`);
       }
       if (r.minAgeDays < 0) err(`${id}: negative requirement age`);
     }
