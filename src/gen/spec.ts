@@ -20,6 +20,7 @@ export function at(o: Odds, rank: number): number {
 
 // How one account type is built tier by tier. The bottom tier samples from the anchors;
 // every higher tier adds a step to the tier below, so it dominates by construction.
+// The key in SPEC.accountTypes is the type's name; customers see it with underscores as spaces.
 export interface AccountTypeSpec {
   minOpeningDeposit: { anchor: Range; step: Range };
   fee: { anchor: Range; step: Range; free: Odds };
@@ -35,11 +36,69 @@ export interface AccountTypeSpec {
     gapAboveBelow: Range; // a higher tier starts this far above the top rate of the tier below
     tiered: Odds; // otherwise flat
   };
-  bonus: Odds;
+  // linkTo: the account type a "linked_account" bonus asks for; null offers only the other triggers.
+  bonus: { chance: Odds; linkTo: AccountType | null };
   // Opening requirements: an account of an earlier type, held for a while. Placed by the
   // tier's real position even on unordered banks, since it says nothing about rates or fees.
   requirement: { chance: Odds; accountType: AccountType; minAgeDays: readonly number[] } | null;
+  // Background customers, considered type by type in order (see background.fallbackAccountType).
+  background: {
+    holdChance: number;
+    tierWeight: Odds; // relative weight of each tier among the products the customer qualifies for
+    startingBalanceMax: Odds; // dollars
+    payroll: boolean; // paychecks land here
+    spending: boolean; // card purchases come out of here, and transfers out
+    receivesTransfers: boolean; // monthly transfers from the spending account land here
+  };
 }
+
+// In order: a product may only require account types listed before its own.
+const ACCOUNT_TYPES: Record<AccountType, AccountTypeSpec> = {
+  checking: {
+    minOpeningDeposit: { anchor: [0, 100, 25], step: [500, 5000, 500] },
+    fee: { anchor: [5, 15, 1], step: [5, 20, 1], free: { bottom: 0, top: 0 } },
+    waiver: { kinds: ["min_balance", "direct_deposit", "senior"], minBalance: [500, 2500, 250], minBalanceGrowth: 10 },
+    interest: {
+      none: { bottom: 0.7, top: 0 },
+      floor: 0,
+      spread: [0.01, 0.1, 0.01],
+      gapAboveBelow: [0.05, 0.5, 0.05],
+      tiered: { bottom: 0, top: 0 },
+    },
+    bonus: { chance: { bottom: 0, top: 0 }, linkTo: null },
+    requirement: null,
+    background: {
+      holdChance: 0.85,
+      tierWeight: { bottom: 0.7, top: 0.3 },
+      startingBalanceMax: { bottom: 4000, top: 30000 },
+      payroll: true,
+      spending: true,
+      receivesTransfers: false,
+    },
+  },
+  savings: {
+    minOpeningDeposit: { anchor: [0, 100, 25], step: [1000, 10000, 500] },
+    fee: { anchor: [2, 5, 1], step: [8, 20, 1], free: { bottom: 0.4, top: 0 } },
+    waiver: { kinds: ["min_balance", "linked_account", "senior"], minBalance: [300, 1500, 100], minBalanceGrowth: 15 },
+    interest: {
+      none: { bottom: 0, top: 0 },
+      floor: 0.5,
+      spread: [0, 1.5, 0.05],
+      gapAboveBelow: [0.25, 1.5, 0.05],
+      tiered: { bottom: 0.5, top: 0.5 },
+    },
+    bonus: { chance: { bottom: 0.5, top: 0.5 }, linkTo: "checking" },
+    requirement: { chance: { bottom: 0, top: 0.6 }, accountType: "checking", minAgeDays: [0, 14, 30, 60, 90] },
+    background: {
+      holdChance: 0.6, // for customers who already hold another account
+      tierWeight: { bottom: 0.65, top: 0.35 },
+      startingBalanceMax: { bottom: 15000, top: 60000 },
+      payroll: false,
+      spending: false,
+      receivesTransfers: true,
+    },
+  },
+};
 
 export const SPEC = {
   bank: {
@@ -74,36 +133,7 @@ export const SPEC = {
   // Product tiers from lowest to highest. Each account type has one product per tier.
   tiers: ["basic", "premium"] as readonly string[],
 
-  accountTypes: {
-    checking: {
-      minOpeningDeposit: { anchor: [0, 100, 25], step: [500, 5000, 500] },
-      fee: { anchor: [5, 15, 1], step: [5, 20, 1], free: { bottom: 0, top: 0 } },
-      waiver: { kinds: ["min_balance", "direct_deposit", "senior"], minBalance: [500, 2500, 250], minBalanceGrowth: 10 },
-      interest: {
-        none: { bottom: 0.7, top: 0 },
-        floor: 0,
-        spread: [0.01, 0.1, 0.01],
-        gapAboveBelow: [0.05, 0.5, 0.05],
-        tiered: { bottom: 0, top: 0 },
-      },
-      bonus: { bottom: 0, top: 0 },
-      requirement: null,
-    },
-    savings: {
-      minOpeningDeposit: { anchor: [0, 100, 25], step: [1000, 10000, 500] },
-      fee: { anchor: [2, 5, 1], step: [8, 20, 1], free: { bottom: 0.4, top: 0 } },
-      waiver: { kinds: ["min_balance", "linked_account", "senior"], minBalance: [300, 1500, 100], minBalanceGrowth: 15 },
-      interest: {
-        none: { bottom: 0, top: 0 },
-        floor: 0.5,
-        spread: [0, 1.5, 0.05],
-        gapAboveBelow: [0.25, 1.5, 0.05],
-        tiered: { bottom: 0.5, top: 0.5 },
-      },
-      bonus: { bottom: 0.5, top: 0.5 },
-      requirement: { chance: { bottom: 0, top: 0.6 }, accountType: "checking", minAgeDays: [0, 14, 30, 60, 90] },
-    },
-  } satisfies Record<AccountType, AccountTypeSpec>,
+  accountTypes: ACCOUNT_TYPES,
 
   // Shape of tiered (balance-band) interest, for any account type whose interest is tiered.
   interestTiers: {
@@ -115,7 +145,7 @@ export const SPEC = {
   },
 
   bonus: {
-    triggers: ["direct_deposit", "linked_checking"],
+    triggers: ["direct_deposit", "linked_account"],
     apyBoost: [0.05, 0.5, 0.05],
   },
 
@@ -136,18 +166,15 @@ export const SPEC = {
     ],
     ageYears: [21, 85, 1],
     historyMonths: 3,
+    // A customer who holds none of the earlier types always gets this one, so everyone has an
+    // account. It needs a product without requirements.
+    fallbackAccountType: "savings" as AccountType,
     accountAgeDays: [10, 1500, 1],
-    checkingChance: 0.85,
-    savingsAlongsideCheckingChance: 0.6, // customers without checking always have savings
-    // Relative weight of each tier when picking a customer's product, among the products whose
-    // requirements the customer meets.
-    tierWeight: { checking: { bottom: 0.7, top: 0.3 }, savings: { bottom: 0.65, top: 0.35 } },
     startingBalance: {
       min: 50, // or the product's minimum opening deposit, if higher
-      step: 50,
-      max: { checking: { bottom: 4000, top: 30000 }, savings: { bottom: 15000, top: 60000 } },
+      step: 50, // the maximum is per account type
     },
-    paycheckChance: 0.7, // of customers with checking
+    paycheckChance: 0.7, // of customers with a payroll account
     paycheck: [600, 3000, 50], // per direct deposit
     payDays: [1, 15],
     courtesyReversalChance: 0.15, // of charged fees, subject to the yearly cap
@@ -158,10 +185,10 @@ export const SPEC = {
     cardPurchaseMinCents: 500,
     cardPurchaseMaxCents: 5000, // or a fifth of the paycheck, if higher
     cardPurchasePaycheckShare: 5,
-    spendingFloorCents: 10_000, // spending never takes checking below this, so later fees cannot overdraw it
-    savingsTransferDay: 20,
-    savingsTransferChance: 0.5,
-    savingsTransfer: [50, 500, 50],
+    spendingFloorCents: 10_000, // spending never takes the spending account below this, so later fees cannot overdraw it
+    transferDay: 20,
+    transferChance: 0.5,
+    transfer: [50, 500, 50],
   },
 } as const;
 

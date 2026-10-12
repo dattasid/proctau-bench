@@ -84,9 +84,9 @@ function assertValid(template: string, bank: Bank, db: Database): void {
 }
 
 // The product an account-opening task targets and the account its customer already holds.
-// Prefers a product with a holds_account requirement; otherwise the top savings tier. The held
-// account is the requirement's account type (checking when there is none), at a tier that has no
-// requirements of its own so the fixture can always hold it.
+// Prefers a product with a holds_account requirement; otherwise the top tier of the last account
+// type. The held account is the requirement's account type (the first account type when there is
+// none), at a tier that has no requirements of its own so the fixture can always hold it.
 interface OpeningTarget {
   product: Product;
   requirement: Requirement | null;
@@ -99,9 +99,9 @@ function openingTargets(config: BankConfig): OpeningTarget[] {
   );
   const candidates = restricted.length > 0
     ? restricted
-    : [{ product: productsOf(config, "savings").at(-1)!, requirement: null as Requirement | null }];
+    : [{ product: productsOf(config, config.accountTypes.at(-1)!).at(-1)!, requirement: null as Requirement | null }];
   return candidates.flatMap(({ product, requirement }) => {
-    const held = productsOf(config, requirement?.accountType ?? "checking").find((p) => p.requirements.length === 0);
+    const held = productsOf(config, requirement?.accountType ?? config.accountTypes[0]!).find((p) => p.requirements.length === 0);
     return held ? [{ product, requirement, held }] : [];
   });
 }

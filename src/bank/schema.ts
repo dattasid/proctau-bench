@@ -1,10 +1,9 @@
 // Bank config schema: the single source of truth for documents, executor and tasks.
 // Amounts are in dollars, rates are APY percentages (2.5 means 2.5%).
 
-// Account types in order: a product may only require account types listed before its own,
-// so opening requirements can never form a cycle.
-export type AccountType = "checking" | "savings";
-export const ACCOUNT_TYPES: readonly AccountType[] = ["checking", "savings"];
+// An account type from BankConfig.accountTypes, e.g. "checking" or "business_checking".
+// Customers see it with underscores as spaces (see accountTypeName).
+export type AccountType = string;
 
 // A tier name from BankConfig.tiers, e.g. "basic". A product id is `${accountType}_${tier}`.
 export type Tier = string;
@@ -41,10 +40,9 @@ export type Interest =
       tiers: { minBalance: number; apy: number }[];
     };
 
-export interface InterestBonus {
-  trigger: "direct_deposit" | "linked_checking";
-  apyBoost: number;
-}
+export type InterestBonus =
+  | { trigger: "direct_deposit"; apyBoost: number }
+  | { trigger: "linked_account"; accountType: AccountType; apyBoost: number }; // holds an open account of this type
 
 export interface Product {
   id: ProductId;
@@ -87,6 +85,9 @@ export interface BankConfig {
   // tests that the agent reads the numbers instead of assuming the usual order.
   unorderedTiers: boolean;
   tiers: Tier[]; // lowest to highest; every account type has one product per tier
+  // In order: a product may only require account types listed before its own, so opening
+  // requirements can never form a cycle.
+  accountTypes: AccountType[];
   products: Record<ProductId, Product>;
   policies: Policies;
 }

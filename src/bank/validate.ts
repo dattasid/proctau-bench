@@ -3,7 +3,6 @@
 
 import { productIds, productsOf } from "./products.ts";
 import { highestApy, lowestApy } from "./rules.ts";
-import { ACCOUNT_TYPES } from "./schema.ts";
 import type { BankConfig, Product } from "./schema.ts";
 
 function minBalanceWaiver(p: Product): number | null {
@@ -17,6 +16,9 @@ export function validateBank(config: BankConfig): string[] {
 
   if (config.tiers.length === 0) return ["no tiers"];
   if (new Set(config.tiers).size !== config.tiers.length) return ["duplicate tier names"];
+  if (config.accountTypes.length === 0) return ["no account types"];
+  if (new Set(config.accountTypes).size !== config.accountTypes.length) return ["duplicate account types"];
+  const typeIndex = (t: string) => config.accountTypes.indexOf(t);
   const expected = new Set(productIds(config));
   for (const id of Object.keys(config.products)) if (!expected.has(id)) err(`${id}: product for an unknown tier or account type`);
 
@@ -32,7 +34,11 @@ export function validateBank(config: BankConfig): string[] {
     const waiver = p.monthlyFee.waiver;
     if (p.monthlyFee.amount === 0 && waiver.conditions.length > 0) err(`${id}: waiver on a zero fee`);
     if (waiver.conditions.length === 0 && waiver.logic !== "any") err(`${id}: empty "all" waiver would waive every fee`);
-    if (p.accountType === "checking" && p.bonuses.length > 0) err(`${id}: checking accounts have no interest bonus in this schema`);
+    for (const b of p.bonuses) {
+      if (b.trigger === "linked_account" && (typeIndex(b.accountType) < 0 || b.accountType === p.accountType)) {
+        err(`${id}: bonus must link to another known account type`);
+      }
+    }
     if (p.interest.structure === "tiered") {
       const tiers = p.interest.tiers;
       if (tiers[0]?.minBalance !== 0) err(`${id}: first tier must start at 0`);
@@ -43,7 +49,7 @@ export function validateBank(config: BankConfig): string[] {
     }
     for (const r of p.requirements) {
       // Requirements only point to earlier account types, so they can never form a cycle.
-      if (ACCOUNT_TYPES.indexOf(r.accountType) >= ACCOUNT_TYPES.indexOf(p.accountType)) {
+      if (typeIndex(r.accountType) < 0 || typeIndex(r.accountType) >= typeIndex(p.accountType)) {
         err(`${id}: may only require an account type listed before ${p.accountType}`);
       }
       if (r.minAgeDays < 0) err(`${id}: negative requirement age`);
@@ -52,7 +58,7 @@ export function validateBank(config: BankConfig): string[] {
   if (errors.length > 0) return errors;
 
   // Tier order: each tier against the one below it, only for banks whose tiers step up.
-  for (const accountType of config.unorderedTiers ? [] : ACCOUNT_TYPES) {
+  for (const accountType of config.unorderedTiers ? [] : config.accountTypes) {
     const ladder = productsOf(config, accountType);
     for (let i = 1; i < ladder.length; i++) {
       const lower = ladder[i - 1]!;

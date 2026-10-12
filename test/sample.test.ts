@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { highestApy, lowestApy } from "../src/bank/rules.ts";
-import { ACCOUNT_TYPES } from "../src/bank/schema.ts";
 import type { BankConfig } from "../src/bank/schema.ts";
 import { validateBank } from "../src/bank/validate.ts";
 import { generateBank } from "../src/gen/generate.ts";
 
 // Ways a premium product can be worse than the basic one of the same account type.
 function inversions(config: BankConfig): string[] {
-  return ACCOUNT_TYPES.flatMap((t) => {
+  return config.accountTypes.flatMap((t) => {
     const basic = config.products[`${t}_basic`];
     const premium = config.products[`${t}_premium`];
     return [

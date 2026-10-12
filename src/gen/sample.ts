@@ -3,9 +3,8 @@
 // and costs more to open and keep fee-free. Works for any number of tiers.
 
 import type { Rng } from "../util/rng.ts";
-import { productId } from "../bank/products.ts";
+import { accountTypeTitle, productId } from "../bank/products.ts";
 import { highestApy } from "../bank/rules.ts";
-import { ACCOUNT_TYPES } from "../bank/schema.ts";
 import type {
   BankConfig,
   AccountType,
@@ -25,10 +24,6 @@ const round3 = (x: number): number => Math.round(x * 1000) / 1000;
 function simulatedDate(rng: Rng, spec: Spec): string {
   const day = rng.int(0, 364);
   return new Date(Date.UTC(spec.bank.simulatedYear, 0, 1 + day)).toISOString().slice(0, 10);
-}
-
-function title(accountType: AccountType): string {
-  return accountType === "checking" ? "Checking" : "Savings";
 }
 
 function scaled(r: Range, factor: number): Range {
@@ -83,7 +78,7 @@ function sampleProduct(
   name: string,
   unordered: boolean,
 ): Product {
-  const typeSpec: AccountTypeSpec = spec.accountTypes[accountType];
+  const typeSpec: AccountTypeSpec = spec.accountTypes[accountType]!;
   const count = spec.tiers.length;
   const rankOf = (p: number) => (count > 1 ? p / (count - 1) : 0);
   const level = unordered ? 0 : position; // the tier's place for sampling rates, fees and limits
@@ -114,9 +109,13 @@ function sampleProduct(
     interest = rng.bool(at(typeSpec.interest.tiered, rank)) ? tieredInterest(rng, spec, base) : { structure: "flat", apy: base };
   }
 
-  const bonuses: InterestBonus[] = rng.bool(at(typeSpec.bonus, rank))
-    ? [{ trigger: rng.pick(spec.bonus.triggers), apyBoost: rng.rate(...spec.bonus.apyBoost) }]
-    : [];
+  const bonuses: InterestBonus[] = [];
+  if (rng.bool(at(typeSpec.bonus.chance, rank))) {
+    const linkTo = typeSpec.bonus.linkTo;
+    const trigger = rng.pick(spec.bonus.triggers.filter((t) => t !== "linked_account" || linkTo));
+    const apyBoost = rng.rate(...spec.bonus.apyBoost);
+    bonuses.push(trigger === "linked_account" ? { trigger, accountType: linkTo!, apyBoost } : { trigger, apyBoost });
+  }
 
   // Requirements follow the tier's real position: they say nothing about rates or fees.
   const req = typeSpec.requirement;
@@ -130,7 +129,7 @@ function sampleProduct(
     id: productId(accountType, tier),
     accountType,
     tier,
-    displayName: `${name} ${title(accountType)}`,
+    displayName: `${name} ${accountTypeTitle(accountType)}`,
     minOpeningDeposit,
     requirements,
     monthlyFee,
@@ -144,7 +143,7 @@ function sampleProducts(rng: Rng, spec: Spec, unordered: boolean): BankConfig["p
   if (scheme.length < spec.tiers.length) throw new Error(`a name scheme has ${scheme.length} lists for ${spec.tiers.length} tiers`);
   const names = spec.tiers.map((_, i) => rng.pick(scheme[i]!));
   const products: BankConfig["products"] = {};
-  for (const accountType of ACCOUNT_TYPES) {
+  for (const accountType of Object.keys(spec.accountTypes)) {
     let below: Product | null = null;
     spec.tiers.forEach((_, position) => {
       const p = sampleProduct(rng, spec, accountType, position, below, names[position]!, unordered);
@@ -174,6 +173,7 @@ export function sampleBank(rng: Rng, seed: number, spec: Spec = SPEC): BankConfi
     },
     unorderedTiers,
     tiers: [...spec.tiers],
+    accountTypes: Object.keys(spec.accountTypes),
     products: sampleProducts(rng, spec, unorderedTiers),
     policies: samplePolicies(rng, spec),
   };

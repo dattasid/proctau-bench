@@ -5,7 +5,7 @@
 import { annualInterestCents } from "../bank/rules.ts";
 import { days, money, moneyCents, percent, times } from "../util/format.ts";
 import type { Rng } from "../util/rng.ts";
-import { allProducts, tierRank } from "../bank/products.ts";
+import { accountTypeName, allProducts, tierRank } from "../bank/products.ts";
 import type { BankConfig, InterestBonus, Product, Requirement, WaiverCondition } from "../bank/schema.ts";
 
 export interface Doc {
@@ -62,7 +62,7 @@ function bonusText(b: InterestBonus): string {
   const trigger =
     b.trigger === "direct_deposit"
       ? "the account holder receives a direct deposit into any of their accounts with us"
-      : "the account holder also has an open checking account with us";
+      : `the account holder also has an open ${accountTypeName(b.accountType)} account with us`;
   return `An extra ${percent(b.apyBoost)} APY is added to every rate for any month in which ${trigger}.`;
 }
 
@@ -96,8 +96,8 @@ function requirementText(r: Requirement): string {
   switch (r.kind) {
     case "holds_account":
       return r.minAgeDays === 0
-        ? `already hold an open ${r.accountType} account with us`
-        : `have held an open ${r.accountType} account with us for at least ${days(r.minAgeDays)}, ` +
+        ? `already hold an open ${accountTypeName(r.accountType)} account with us`
+        : `have held an open ${accountTypeName(r.accountType)} account with us for at least ${days(r.minAgeDays)}, ` +
             `counted from the date that account was opened to today`;
   }
 }
@@ -111,7 +111,7 @@ function eligibilityText(p: Product): string {
 }
 
 function productSheet(config: BankConfig, p: Product, say: Say): Doc {
-  const kind = p.accountType === "checking" ? "checking" : "savings";
+  const kind = accountTypeName(p.accountType);
   const rank = tierRank(config, p.tier);
   // Only the top tier of an ordered bank is described as being for higher balances.
   const intro =
