@@ -27,6 +27,7 @@ export const TRIGGERS = [
   "done", // the agent reports the goal action done
   "date_given", // the agent gives the date from which the customer can open the product
   "refused", // the agent says no: not eligible, the fee was valid, or the goal action was not done
+  "transfer_offered", // the agent offers to hand over to a human
   "confirm_mismatch", // the agent asks to confirm an action that differs from the goal
   "confirm_matches", // the agent asks to confirm the goal action
   "alternative", // the agent suggests something else

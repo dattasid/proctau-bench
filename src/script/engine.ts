@@ -8,11 +8,13 @@ import type { CustomerAct, CustomerScript, Goal, Reply, Trigger } from "./types.
 
 // How every customer reacts unless their script says otherwise.
 export const SHARED_REACTIONS: Record<Trigger, Reply[]> = {
-  transferred: ["end"],
+  // The run ends when the agent actually calls the transfer tool; until then, the customer waits.
+  transferred: ["acknowledge", "thank_and_end"],
   closing: ["end"],
   done: ["thank_and_end"],
   date_given: ["thank_and_end"],
   refused: ["ask_why", "thank_and_end"],
+  transfer_offered: ["confirm"],
   confirm_mismatch: ["correct"],
   confirm_matches: ["confirm"],
   alternative: ["decline"],
@@ -71,6 +73,9 @@ function triggersOf(script: CustomerScript, acts: Act[]): Set<Trigger> {
         break;
       case "closing":
         found.add("closing");
+        break;
+      case "offer_transfer":
+        found.add("transfer_offered");
         break;
       case "action_result":
         if (a.args.action === goal.action && about(goal, a)) found.add(a.args.status === "done" ? "done" : "refused");

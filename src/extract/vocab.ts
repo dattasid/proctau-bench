@@ -126,8 +126,15 @@ export const ACTS: readonly ActSpec[] = [
   },
   { name: "offer_more_help", description: "The agent asks whether it can help with anything else.", args: {}, key: [], decides: true },
   {
+    name: "offer_transfer",
+    description: "The agent offers to transfer the customer to a human agent, without doing it yet (\"I can transfer you if you like\").",
+    args: { reason: { type: "string", optional: true, description: "The reason given, briefly." } },
+    key: [],
+    decides: true,
+  },
+  {
     name: "transfer_to_human",
-    description: "The agent says it is transferring the customer to a human agent.",
+    description: "The agent says it is transferring the customer to a human agent now.",
     args: { reason: { type: "string", optional: true, description: "The reason given, briefly." } },
     key: [],
     decides: true,

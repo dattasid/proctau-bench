@@ -148,7 +148,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "get_transactions",
-    description: "List an account's transactions, oldest first, optionally within a date range (YYYY-MM-DD).",
+    description:
+      "List an account's transactions, oldest first, optionally within a date range (YYYY-MM-DD). Each shows the " +
+      "account balance right after it, as on a statement.",
     params: {
       accountId: { type: "string", description: "Account id" },
       fromDate: { type: "string", description: "First date to include", optional: true },
@@ -162,12 +164,19 @@ export const TOOLS: Tool[] = [
       const to = (args.toDate as string | undefined) ?? "9999-12-31";
       return {
         checks: [system("account.exists", true, "account found"), identity(s, account.customerId, false)],
-        apply: () => ({
-          transactions: s.db.transactions
-            .filter((t) => t.accountId === account.id && t.date >= from && t.date <= to)
-            .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
-            .map(describeTransaction),
-        }),
+        apply: () => {
+          // The running balance over the whole history, so a date range still shows true balances.
+          const all = s.db.transactions
+            .filter((t) => t.accountId === account.id)
+            .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+          let balance = 0;
+          const withBalance = all.map((t) => ({ t, after: (balance += t.amountCents) }));
+          return {
+            transactions: withBalance
+              .filter(({ t }) => t.date >= from && t.date <= to)
+              .map(({ t, after }) => ({ ...describeTransaction(t), balanceAfter: dollars(after) })),
+          };
+        },
       };
     },
   },

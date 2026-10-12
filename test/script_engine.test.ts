@@ -116,9 +116,13 @@ describe("script engine", () => {
     assert.equal(done.end, "user_stop");
   });
 
-  it("ends without a message when the agent transfers or says goodbye", () => {
+  it("waits while the agent says it is transferring, accepts an offered transfer, ends on goodbye", () => {
     const t = step(eligible, newState(), [act("transfer_to_human")]);
-    assert.equal(t.end, "agent_ended");
-    assert.deepEqual(t.acts, []);
+    assert.deepEqual(names(t), ["acknowledge"]);
+    assert.equal(t.end, null);
+    assert.deepEqual(names(step(eligible, newState(), [act("offer_transfer")])), ["confirm"]);
+    const bye = step(eligible, newState(), [act("closing")]);
+    assert.equal(bye.end, "agent_ended");
+    assert.deepEqual(bye.acts, []);
   });
 });
