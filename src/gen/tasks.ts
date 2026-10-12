@@ -4,7 +4,7 @@
 // misses its intended verdict throws instead of producing a silently wrong task.
 
 import type { Bank } from "./generate.ts";
-import { addDays } from "../util/dates.ts";
+import { addDays, daysBetween } from "../util/dates.ts";
 import { callTool } from "../env/executor.ts";
 import { addAccount, addCustomer, chargeMonthlyFees } from "./fixtures.ts";
 import { longDate, money } from "../util/format.ts";
@@ -101,18 +101,21 @@ function shuffled<T>(rng: Rng, items: T[]): T[] {
   return out;
 }
 
-// A product whose account satisfies `r`, preferring one that would not also satisfy `avoid`.
-function satisfierOf(rng: Rng, config: BankConfig, r: Requirement, avoid: Requirement | null): Product {
+// A product whose account satisfies `r`, preferring one that would not also satisfy `avoid` and
+// one the customer does not hold yet.
+function satisfierOf(rng: Rng, config: BankConfig, r: Requirement, avoid: Requirement | null, held: Set<string>): Product {
   const all = r.kind === "holds_product" ? [config.products[r.productId]!] : productsOf(config, r.accountType);
-  const preferred = all.filter((p) => !avoid || r === avoid || !requirementMatches(config, p.id, avoid));
-  return rng.pick(preferred.length > 0 ? preferred : all);
+  const safe = all.filter((p) => !avoid || r === avoid || !requirementMatches(config, p.id, avoid));
+  const fresh = safe.filter((p) => !held.has(p.id));
+  return rng.pick(fresh.length > 0 ? fresh : safe.length > 0 ? safe : all);
 }
 
-// Opens an account for each of `product`'s requirements, early enough before `on` to count, except
-// `tooNew`, which is opened too recently; no other account, at any depth, should satisfy it. Each
-// account gets its own prerequisites first, all the way down; requirements only point to earlier
-// products, so this ends. The first account also gets `extraCents`. Returns the accounts for
-// `product`'s own requirements, in order.
+// Gives the customer an account for each of `product`'s requirements, early enough before `on` to
+// count, except `tooNew`, which is opened too recently; no other account, at any depth, should
+// satisfy it. An account the customer already holds is reused when it qualifies; a new one gets its
+// own prerequisites first, all the way down (requirements only point to earlier products, so this
+// ends). Specific products and longer holds go first, so later requirements can reuse them. The
+// first account opened here also gets `extraCents` and is returned as `funded`.
 function holdPrerequisites(
   rng: Rng,
   config: BankConfig,
@@ -122,15 +125,31 @@ function holdPrerequisites(
   on: string,
   tooNew: Requirement | null,
   avoid: Requirement | null,
+  avoidOn: string, // the date `avoid` is judged on: the day the customer asks to open the target
   extraCents: number,
-): Account[] {
-  return product.requirements.map((r, i) => {
-    const held = satisfierOf(rng, config, r, avoid);
+): Account | null {
+  const specificFirst = (r: Requirement) => (r.kind === "holds_product" ? 0 : 1);
+  const order = [...product.requirements].sort((a, b) => specificFirst(a) - specificFirst(b) || b.minAgeDays - a.minAgeDays);
+  let funded: Account | null = null;
+  for (const r of order) {
+    const mine = Object.values(db.accounts).filter((a) => a.customerId === customer.id);
+    const reusable = mine.find(
+      (a) =>
+        r !== tooNew &&
+        requirementMatches(config, a.productId, r) &&
+        daysBetween(a.openedOn, on) >= r.minAgeDays &&
+        // An account that matches `avoid` is fine as long as it is too new to satisfy it.
+        !(avoid && requirementMatches(config, a.productId, avoid) && daysBetween(a.openedOn, avoidOn) >= avoid.minAgeDays),
+    );
+    if (reusable) continue;
+    const held = satisfierOf(rng, config, r, avoid, new Set(mine.map((a) => a.productId)));
     const openedOn = addDays(on, -(r === tooNew ? rng.int(1, r.minAgeDays - 1) : r.minAgeDays + rng.int(5, 90)));
-    holdPrerequisites(rng, config, db, customer, held, openedOn, null, avoid, 0);
-    const cents = (held.minOpeningDeposit + rng.money(2000, 6000, 100)) * 100 + (i === 0 ? extraCents : 0);
-    return addAccount(db, customer, held.id, openedOn, cents);
-  });
+    holdPrerequisites(rng, config, db, customer, held, openedOn, null, avoid, avoidOn, 0);
+    const cents = (held.minOpeningDeposit + rng.money(2000, 6000, 100)) * 100 + (funded ? 0 : extraCents);
+    const account = addAccount(db, customer, held.id, openedOn, cents);
+    funded ??= account;
+  }
+  return funded;
 }
 
 // A customer who wants `target`, funded from the account for its first requirement (or from an
@@ -146,9 +165,12 @@ function openingFixture(rng: Rng, bank: Bank, target: Product, tooNew: Requireme
   const fundCents = (deposit + rng.money(500, 5000, 100)) * 100;
   const funding =
     target.requirements.length > 0
-      ? holdPrerequisites(rng, config, db, customer, target, today, tooNew, tooNew, fundCents)[0]!
+      ? holdPrerequisites(rng, config, db, customer, target, today, tooNew, tooNew, today, fundCents)!
       : addAccount(db, customer, productsOf(config, config.accountTypes[0]!)[0]!.id, addDays(today, -rng.int(30, 400)), fundCents);
-  for (const a of Object.values(db.accounts)) if (a.customerId === customer.id) chargeMonthlyFees(config, db, a, today);
+  const held = Object.values(db.accounts).filter((a) => a.customerId === customer.id);
+  // Two accounts of one product would make "your Gold Checking account" ambiguous.
+  if (new Set(held.map((a) => a.productId)).size < held.length) throw new Error("fixture holds two accounts of one product");
+  for (const a of held) chargeMonthlyFees(config, db, a, today);
   const fundingProduct = config.products[funding.productId]!;
   const verify = { tool: "verify_identity", args: { customerId: customer.id, dateOfBirth: customer.dateOfBirth, ssnLast4: customer.ssnLast4 } };
   const open = {
@@ -179,9 +201,10 @@ const openAccountEligible: TaskTemplate = {
   id: "open_account_eligible",
   applies: (config) => openingTargets(config).length > 0,
   build(rng, bank) {
-    // Another target is tried when a fixture comes out invalid, e.g. a long chain whose fees run
-    // an account dry.
-    return firstThatBuilds(shuffled(rng, openingTargets(bank.config)), (target) => {
+    // Another target, or another try at the same one, when a fixture comes out invalid: a long
+    // chain whose fees run an account dry, or two requirements met by the same product.
+    const targets = shuffled(rng, openingTargets(bank.config));
+    return firstThatBuilds([...targets, ...targets, ...targets], (target) => {
       const f = openingFixture(rng, bank, target, null);
       assertValid(this.id, bank, f.db);
       const goldCalls = [f.find, f.verify, f.open];
