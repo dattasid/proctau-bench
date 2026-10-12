@@ -1,4 +1,4 @@
-// Samples a random but coherent bank. Premium is built from Basic so that it
+// Samples a random but coherent bank from SPEC. Premium is built from Basic so that it
 // dominates on rate and limits and costs more to open and keep fee-free.
 
 import type { Rng } from "../util/rng.ts";
@@ -12,89 +12,69 @@ import type {
   Product,
   WaiverCondition,
 } from "../bank/schema.ts";
+import { SPEC } from "./spec.ts";
+import type { Range } from "./spec.ts";
 
-const BANK_PREFIXES = ["Harbor", "Summit", "Cedar", "Lakeside", "Ironwood", "Meridian", "Northgate", "Willow"];
-const BANK_SUFFIXES = ["Bank", "Savings Bank", "Trust", "Community Bank"];
-
-const NAME_SCHEMES: readonly { basic: readonly string[]; premium: readonly string[] }[] = [
-  { basic: ["Bronze", "Silver"], premium: ["Gold", "Platinum"] },
-  { basic: ["Blue", "Green"], premium: ["Navy", "Emerald"] },
-  { basic: ["Essential", "Everyday"], premium: ["Plus", "Preferred"] },
-];
-
-const SIM_YEAR = 2026;
+const round3 = (x: number): number => Math.round(x * 1000) / 1000;
 
 function simulatedDate(rng: Rng): string {
   const day = rng.int(0, 364);
-  return new Date(Date.UTC(SIM_YEAR, 0, 1 + day)).toISOString().slice(0, 10);
+  return new Date(Date.UTC(SPEC.bank.simulatedYear, 0, 1 + day)).toISOString().slice(0, 10);
 }
 
 function title(family: Family): string {
   return family === "checking" ? "Checking" : "Savings";
 }
 
-// With "all" logic any subset is allowed, so a waiver can demand a high balance, direct
-// deposits and a senior age at once. Unrealistic but intentional: rare, valid rules test
-// whether the agent reads the policy instead of applying common-bank priors.
-function waiverConditions(
-  rng: Rng,
-  family: Family,
-  minBalanceRange: [number, number, number],
-): WaiverCondition[] {
-  const measure = rng.pick(["daily_minimum", "monthly_average"] as const);
+function waiverConditions(rng: Rng, family: Family, minBalance: Range): WaiverCondition[] {
+  const spec = SPEC.monthlyFee;
+  const measure = rng.pick(spec.balanceMeasures);
   const pool: WaiverCondition[] = [
-    { kind: "min_balance", amount: rng.money(...minBalanceRange), measure },
+    { kind: "min_balance", amount: rng.money(...minBalance), measure },
     family === "checking"
-      ? { kind: "direct_deposit", minMonthlyAmount: rng.money(250, 1500, 250) }
+      ? { kind: "direct_deposit", minMonthlyAmount: rng.money(...spec.directDepositMonthly) }
       : { kind: "linked_account" },
-    { kind: "senior", minAge: rng.int(62, 67) },
+    { kind: "senior", minAge: rng.int(...spec.seniorMinAge) },
   ];
-  return rng.subset(pool, 1, 3);
+  return rng.subset(pool, ...spec.conditionCount);
 }
 
-function monthlyFee(
-  rng: Rng,
-  family: Family,
-  amount: number,
-  minBalanceRange: [number, number, number],
-): MonthlyFee {
-  // Zero fee, or 15% of paid fees: no way to waive.
-  if (amount === 0 || !rng.bool(0.85)) return { amount, waiver: { logic: "any", conditions: [] } };
+function monthlyFee(rng: Rng, family: Family, amount: number, minBalance: Range): MonthlyFee {
+  if (amount === 0 || !rng.bool(SPEC.monthlyFee.waivableChance)) return { amount, waiver: { logic: "any", conditions: [] } };
   return {
     amount,
-    waiver: { logic: rng.pick(["any", "all"] as const), conditions: waiverConditions(rng, family, minBalanceRange) },
+    waiver: { logic: rng.pick(SPEC.monthlyFee.logics), conditions: waiverConditions(rng, family, minBalance) },
   };
 }
 
 // Interest whose lowest rate is at least `floorApy`, returned with its top rate.
 function savingsInterest(rng: Rng, floorApy: number): { interest: Interest; topApy: number } {
-  const base = Math.round((floorApy + rng.rate(0, 1.5, 0.05)) * 1000) / 1000;
-  if (rng.bool(0.5)) return { interest: { structure: "flat", apy: base }, topApy: base };
+  const spec = SPEC.savings.interest;
+  const base = round3(floorApy + rng.rate(...spec.apyAboveFloor));
+  if (rng.bool(spec.flatChance)) return { interest: { structure: "flat", apy: base }, topApy: base };
 
-  const t1 = rng.money(5000, 25000, 5000);
+  const t1 = rng.money(...spec.firstTierMinBalance);
   const tiers = [
     { minBalance: 0, apy: base },
-    { minBalance: t1, apy: Math.round((base + rng.rate(0.1, 0.75, 0.05)) * 1000) / 1000 },
+    { minBalance: t1, apy: round3(base + rng.rate(...spec.tierApyStep)) },
   ];
-  if (rng.bool(0.5)) {
+  if (rng.bool(spec.thirdTierChance)) {
     const prev = tiers[1]!.apy;
     tiers.push({
-      minBalance: t1 + rng.money(25000, 75000, 25000),
-      apy: Math.round((prev + rng.rate(0.1, 0.75, 0.05)) * 1000) / 1000,
+      minBalance: t1 + rng.money(...spec.thirdTierBalanceGap),
+      apy: round3(prev + rng.rate(...spec.tierApyStep)),
     });
   }
   return {
-    interest: { structure: "tiered", appliesTo: rng.pick(["whole_balance", "marginal"] as const), tiers },
+    interest: { structure: "tiered", appliesTo: rng.pick(spec.appliesTo), tiers },
     topApy: tiers.at(-1)!.apy,
   };
 }
 
 function savingsBonuses(rng: Rng): InterestBonus[] {
-  if (!rng.bool(0.5)) return [];
-  return [{
-    trigger: rng.pick(["direct_deposit", "linked_checking"] as const),
-    apyBoost: rng.rate(0.05, 0.5, 0.05),
-  }];
+  const spec = SPEC.savings.bonus;
+  if (!rng.bool(spec.chance)) return [];
+  return [{ trigger: rng.pick(spec.triggers), apyBoost: rng.rate(...spec.apyBoost) }];
 }
 
 function product(
@@ -107,42 +87,46 @@ function product(
 }
 
 function sampleProducts(rng: Rng): BankConfig["products"] {
-  const scheme = rng.pick(NAME_SCHEMES);
+  const scheme = rng.pick(SPEC.bank.nameSchemes);
   const basicName = rng.pick(scheme.basic);
   const premiumName = rng.pick(scheme.premium);
 
   // Checking: Basic may pay nothing; Premium always pays more than Basic.
-  const basicCheckingApy = rng.bool(0.3) ? rng.rate(0.01, 0.1, 0.01) : 0;
-  const premiumCheckingApy = Math.round((basicCheckingApy + rng.rate(0.05, 0.5, 0.05)) * 1000) / 1000;
-  const basicCheckingFee = rng.money(5, 15, 1);
+  const cb = SPEC.checking.basic;
+  const cp = SPEC.checking.premium;
+  const basicCheckingApy = rng.bool(cb.interestChance) ? rng.rate(...cb.apy) : 0;
+  const premiumCheckingApy = round3(basicCheckingApy + rng.rate(...cp.apyAboveBasic));
+  const basicCheckingFee = rng.money(...cb.fee);
 
   const checkingBasic = product("checking", "basic", basicName, {
-    minOpeningDeposit: rng.money(0, 100, 25),
-    monthlyFee: monthlyFee(rng, "checking", basicCheckingFee, [500, 2500, 250]),
+    minOpeningDeposit: rng.money(...cb.minOpeningDeposit),
+    monthlyFee: monthlyFee(rng, "checking", basicCheckingFee, cb.waiverMinBalance),
     interest: basicCheckingApy > 0 ? { structure: "flat", apy: basicCheckingApy } : { structure: "none" },
     bonuses: [],
   });
   const checkingPremium = product("checking", "premium", premiumName, {
-    minOpeningDeposit: rng.money(500, 5000, 500),
-    monthlyFee: monthlyFee(rng, "checking", basicCheckingFee + rng.money(5, 20, 1), [5000, 25000, 2500]),
+    minOpeningDeposit: rng.money(...cp.minOpeningDeposit),
+    monthlyFee: monthlyFee(rng, "checking", basicCheckingFee + rng.money(...cp.feeAboveBasic), cp.waiverMinBalance),
     interest: { structure: "flat", apy: premiumCheckingApy },
     bonuses: [],
   });
 
   // Savings: Premium's lowest rate starts above Basic's highest rate.
-  const basicSavings = savingsInterest(rng, 0.5);
-  const premiumSavings = savingsInterest(rng, basicSavings.topApy + rng.rate(0.25, 1.5, 0.05));
-  const basicSavingsFee = rng.bool(0.4) ? 0 : rng.money(2, 5, 1);
+  const sb = SPEC.savings.basic;
+  const sp = SPEC.savings.premium;
+  const basicSavings = savingsInterest(rng, sb.apyFloor);
+  const premiumSavings = savingsInterest(rng, basicSavings.topApy + rng.rate(...sp.apyGapAboveBasicTop));
+  const basicSavingsFee = rng.bool(sb.freeChance) ? 0 : rng.money(...sb.fee);
 
   const savingsBasic = product("savings", "basic", basicName, {
-    minOpeningDeposit: rng.money(0, 100, 25),
-    monthlyFee: monthlyFee(rng, "savings", basicSavingsFee, [300, 1500, 100]),
+    minOpeningDeposit: rng.money(...sb.minOpeningDeposit),
+    monthlyFee: monthlyFee(rng, "savings", basicSavingsFee, sb.waiverMinBalance),
     interest: basicSavings.interest,
     bonuses: savingsBonuses(rng),
   });
   const savingsPremium = product("savings", "premium", premiumName, {
-    minOpeningDeposit: rng.money(1000, 10000, 500),
-    monthlyFee: monthlyFee(rng, "savings", basicSavingsFee + rng.money(8, 20, 1), [5000, 25000, 2500]),
+    minOpeningDeposit: rng.money(...sp.minOpeningDeposit),
+    monthlyFee: monthlyFee(rng, "savings", basicSavingsFee + rng.money(...sp.feeAboveBasic), sp.waiverMinBalance),
     interest: premiumSavings.interest,
     bonuses: savingsBonuses(rng),
   });
@@ -156,13 +140,14 @@ function sampleProducts(rng: Rng): BankConfig["products"] {
 }
 
 function samplePolicies(rng: Rng): Policies {
-  const requiresChecking = rng.bool(0.6);
+  const spec = SPEC.policies;
+  const requiresChecking = rng.bool(spec.premiumSavingsRequiresCheckingChance);
   return {
-    identityVerification: rng.pick(["once_per_session", "before_every_write"] as const),
-    feeReversal: { maxPerYear: rng.int(0, 3) },
+    identityVerification: rng.pick(spec.identityVerification),
+    feeReversal: { maxPerYear: rng.int(...spec.courtesyReversalsPerYear) },
     premiumSavingsEligibility: {
       requiresChecking,
-      minCheckingAgeDays: requiresChecking ? rng.pick([0, 14, 30, 60, 90]) : 0,
+      minCheckingAgeDays: requiresChecking ? rng.pick(spec.minCheckingAgeDays) : 0,
       enforcement: "agent", // "api" only for RL with weak agents, see Enforcement
     },
   };
@@ -173,7 +158,7 @@ export function sampleBank(rng: Rng, seed: number): BankConfig {
     schemaVersion: 1,
     seed,
     bank: {
-      name: `${rng.pick(BANK_PREFIXES)} ${rng.pick(BANK_SUFFIXES)}`,
+      name: `${rng.pick(SPEC.bank.prefixes)} ${rng.pick(SPEC.bank.suffixes)}`,
       simulatedDate: simulatedDate(rng),
     },
     products: sampleProducts(rng),

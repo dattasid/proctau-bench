@@ -7,19 +7,9 @@ import type { Rng } from "../util/rng.ts";
 import { courtesyReversalsInYear, monthlyFeeDue } from "../bank/rules.ts";
 import type { BankConfig, ProductId } from "../bank/schema.ts";
 import type { Account, Customer, Database, Transaction, TransactionKind } from "../bank/state.ts";
+import { SPEC } from "./spec.ts";
 
-const FIRST_NAMES = [
-  "Maria", "James", "Aisha", "Daniel", "Priya", "Thomas", "Elena", "Kwame", "Sofia", "Hiroshi",
-  "Grace", "Mateo", "Nadia", "Owen", "Leila", "Samuel", "Ingrid", "Ravi", "Chloe", "Marcus",
-];
-const LAST_NAMES = [
-  "Chen", "Okafor", "Garcia", "Novak", "Patel", "Brennan", "Haddad", "Kim", "Lindqvist", "Mensah",
-  "Rossi", "Tanaka", "Dubois", "Alvarez", "Kowalski", "Nguyen", "Abara", "Fischer", "Reyes", "Walsh",
-];
-
-const HISTORY_MONTHS = 3;
-// Card spending never takes an account below this, so later fees cannot overdraw it.
-const SPENDING_FLOOR_CENTS = 10_000;
+const BG = SPEC.background;
 
 interface Holder {
   customer: Customer;
@@ -31,43 +21,43 @@ function sampleCustomer(rng: Rng, id: string, name: string, today: string): Cust
   return {
     id,
     name,
-    dateOfBirth: addDays(today, -(rng.int(21, 85) * 365 + rng.int(0, 364))),
+    dateOfBirth: addDays(today, -(rng.int(...BG.ageYears) * 365 + rng.int(0, 364))),
     ssnLast4: String(rng.int(0, 9999)).padStart(4, "0"),
   };
 }
 
 function startingBalanceCents(rng: Rng, config: BankConfig, productId: ProductId): number {
-  const min = Math.max(config.products[productId].minOpeningDeposit, 50);
-  const max = { checking_basic: 4000, checking_premium: 30000, savings_basic: 15000, savings_premium: 60000 }[productId];
-  return rng.money(min, Math.max(min, max), 50) * 100;
+  const { min: floor, step, max: maxByProduct } = BG.startingBalance;
+  const min = Math.max(config.products[productId].minOpeningDeposit, floor);
+  return rng.money(min, Math.max(min, maxByProduct[productId]), step) * 100;
 }
 
 function planAccounts(rng: Rng, config: BankConfig, customerId: string, today: string): Omit<Account, "id">[] {
-  const openedOn = () => addDays(today, -rng.int(10, 1500));
+  const openedOn = () => addDays(today, -rng.int(...BG.accountAgeDays));
   const planned: Omit<Account, "id">[] = [];
-  const hasChecking = rng.bool(0.85);
+  const hasChecking = rng.bool(BG.checkingChance);
   let checkingOpened: string | null = null;
   if (hasChecking) {
     checkingOpened = openedOn();
-    const productId: ProductId = rng.bool(0.3) ? "checking_premium" : "checking_basic";
+    const productId: ProductId = rng.bool(BG.premiumCheckingChance) ? "checking_premium" : "checking_basic";
     planned.push({ customerId, productId, openedOn: checkingOpened, status: "open", balanceCents: 0 });
   }
-  if (!hasChecking || rng.bool(0.6)) {
+  if (!hasChecking || rng.bool(BG.savingsAlongsideCheckingChance)) {
     const savingsOpened = openedOn();
     const rule = config.policies.premiumSavingsEligibility;
     const eligible =
       !rule.requiresChecking ||
       (checkingOpened !== null && daysBetween(checkingOpened, savingsOpened) >= rule.minCheckingAgeDays);
-    const productId: ProductId = eligible && rng.bool(0.35) ? "savings_premium" : "savings_basic";
+    const productId: ProductId = eligible && rng.bool(BG.premiumSavingsChance) ? "savings_premium" : "savings_basic";
     planned.push({ customerId, productId, openedOn: savingsOpened, status: "open", balanceCents: 0 });
   }
   return planned;
 }
 
-export function sampleDatabase(rng: Rng, config: BankConfig, customerCount = 6): Database {
+export function sampleDatabase(rng: Rng, config: BankConfig, customerCount: number = BG.customers): Database {
   const today = config.bank.simulatedDate;
   const yesterday = addDays(today, -1);
-  const historyStart = monthStart(addMonths(monthOf(today), -HISTORY_MONTHS));
+  const historyStart = monthStart(addMonths(monthOf(today), -BG.historyMonths));
   const reversalCap = config.policies.feeReversal.maxPerYear;
   const db: Database = { schemaVersion: 1, customers: {}, accounts: {}, transactions: [] };
 
@@ -76,7 +66,7 @@ export function sampleDatabase(rng: Rng, config: BankConfig, customerCount = 6):
   let accountCount = 0;
   for (let i = 1; i <= customerCount; i++) {
     let name: string;
-    do name = `${rng.pick(FIRST_NAMES)} ${rng.pick(LAST_NAMES)}`;
+    do name = `${rng.pick(BG.firstNames)} ${rng.pick(BG.lastNames)}`;
     while (names.has(name));
     names.add(name);
     const customer = sampleCustomer(rng, `cust_${String(i).padStart(2, "0")}`, name, today);
@@ -87,7 +77,7 @@ export function sampleDatabase(rng: Rng, config: BankConfig, customerCount = 6):
       return { account, startCents: startingBalanceCents(rng, config, account.productId) };
     });
     const hasChecking = accounts.some((a) => a.account.productId.startsWith("checking"));
-    holders.push({ customer, accounts, paycheckCents: hasChecking && rng.bool(0.7) ? rng.money(600, 3000, 50) * 100 : 0 });
+    holders.push({ customer, accounts, paycheckCents: hasChecking && rng.bool(BG.paycheckChance) ? rng.money(...BG.paycheck) * 100 : 0 });
   }
 
   const balance = new Map<string, number>();
@@ -117,8 +107,8 @@ export function sampleDatabase(rng: Rng, config: BankConfig, customerCount = 6):
         const fee = monthlyFeeDue(config, db, account, month);
         if (fee === 0) continue;
         const charge = post(account, day, "monthly_fee", -fee, `Monthly fee for ${month}`, { feeMonth: month });
-        if (rng.bool(0.15)) {
-          const when = addDays(day, rng.int(1, 10));
+        if (rng.bool(BG.courtesyReversalChance)) {
+          const when = addDays(day, rng.int(...BG.courtesyReversalDelayDays));
           scheduled.push({
             date: when,
             run: () => {
@@ -144,21 +134,22 @@ export function sampleDatabase(rng: Rng, config: BankConfig, customerCount = 6):
       const checking = open.find((a) => a.productId.startsWith("checking"));
       const savings = open.find((a) => a.productId.startsWith("savings"));
 
-      if (checking && holder.paycheckCents > 0 && (dayOfMonth === 1 || dayOfMonth === 15)) {
+      if (checking && holder.paycheckCents > 0 && (BG.payDays as readonly number[]).includes(dayOfMonth)) {
         post(checking, day, "direct_deposit", holder.paycheckCents, "Payroll direct deposit");
       }
-      if (holder.paycheckCents === 0 && open.length > 0 && rng.bool(0.05)) {
-        post(rng.pick(open), day, "deposit", rng.money(100, 1500, 50) * 100, "Cash deposit");
+      if (holder.paycheckCents === 0 && open.length > 0 && rng.bool(BG.cashDepositChance)) {
+        post(rng.pick(open), day, "deposit", rng.money(...BG.cashDeposit) * 100, "Cash deposit");
       }
-      if (checking && rng.bool(0.3)) {
-        const amount = rng.int(500, Math.max(5000, holder.paycheckCents / 5));
-        if ((balance.get(checking.id) ?? 0) - amount >= SPENDING_FLOOR_CENTS) {
+      if (checking && rng.bool(BG.cardPurchaseChance)) {
+        const max = Math.max(BG.cardPurchaseMaxCents, holder.paycheckCents / BG.cardPurchasePaycheckShare);
+        const amount = rng.int(BG.cardPurchaseMinCents, max);
+        if ((balance.get(checking.id) ?? 0) - amount >= BG.spendingFloorCents) {
           post(checking, day, "card_purchase", -amount, "Card purchase");
         }
       }
-      if (checking && savings && dayOfMonth === 20 && rng.bool(0.5)) {
-        const amount = rng.money(50, 500, 50) * 100;
-        if ((balance.get(checking.id) ?? 0) - amount >= SPENDING_FLOOR_CENTS) {
+      if (checking && savings && dayOfMonth === BG.savingsTransferDay && rng.bool(BG.savingsTransferChance)) {
+        const amount = rng.money(...BG.savingsTransfer) * 100;
+        if ((balance.get(checking.id) ?? 0) - amount >= BG.spendingFloorCents) {
           const out = post(checking, day, "transfer_out", -amount, `Transfer to ${savings.id}`);
           const into = post(savings, day, "transfer_in", amount, `Transfer from ${checking.id}`, { relatedId: out.id });
           out.relatedId = into.id;
