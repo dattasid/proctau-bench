@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Procedurally generated banking policy benchmark: generator and executor",
+  "description": "Procedurally generated tau-bench-style evals: randomized banks, policies and tasks, rule-audited gold answers, and a script-controlled customer.",
+  "license": "MIT",
+  "repository": "github:dattasid/proctau-bench",
   "scripts": {
     "generate": "node --experimental-strip-types --no-warnings src/gen/cli.ts",
     "typecheck": "tsc --noEmit",
