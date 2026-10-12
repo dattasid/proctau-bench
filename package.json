@@ -10,7 +10,8 @@
     "test": "node --experimental-strip-types --no-warnings --test \"test/**/*.test.ts\"",
     "serve": "node --experimental-strip-types --no-warnings src/env/serve.ts",
     "harness": "node --experimental-strip-types --no-warnings src/harness/cli.ts",
-    "view": "node --experimental-strip-types --no-warnings src/viewer/cli.ts"
+    "view": "node --experimental-strip-types --no-warnings src/viewer/cli.ts",
+    "extract": "node --experimental-strip-types --no-warnings src/extract/cli.ts"
   },
   "engines": {
     "node": ">=22.6"
