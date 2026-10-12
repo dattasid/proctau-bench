@@ -250,7 +250,13 @@ const openAccountTooNew: TaskTemplate = {
 
 export const TEMPLATES: TaskTemplate[] = [openAccountEligible, openAccountTooNew];
 
-// Every applicable template for one bank, each with its own rng stream.
-export function buildTasks(bank: Bank): Task[] {
-  return TEMPLATES.flatMap((t, i) => (t.applies(bank.config) ? [t.build(createRng(bank.seed, 100 + i), bank)] : []));
+// Every applicable template for one bank, each with its own rng stream. A `variant` above 0 draws
+// each template again from another stream: a different target and customer, and an id ending in
+// `:<variant>`.
+export function buildTasks(bank: Bank, variant = 0): Task[] {
+  return TEMPLATES.flatMap((t, i) => {
+    if (!t.applies(bank.config)) return [];
+    const task = t.build(createRng(bank.seed, 100 + i + 1000 * variant), bank);
+    return [variant > 0 ? { ...task, id: `${task.id}:${variant}` } : task];
+  });
 }

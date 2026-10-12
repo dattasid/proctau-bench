@@ -1,5 +1,6 @@
-// Usage: npm run harness -- [--seed N] [--count K] [--template ID] [--agent-model M]
-//          [--user-model M] [--server URL] [--out DIR]
+// Usage: npm run harness -- [--seed N] [--count K] [--template ID] [--tasks-per-bank T]
+//          [--agent-model M] [--user-model M] [--server URL] [--out DIR]
+// --tasks-per-bank: draw more task variants until each bank has T tasks (default: one per template).
 // Generates banks and tasks, runs each task as a conversation against the executor
 // (an in-process server unless --server is given) and writes one JSON file per run.
 // A batch directory also holds meta.json and, under banks/, each bank's config, documents
@@ -21,6 +22,7 @@ const { values } = parseArgs({
     seed: { type: "string", default: "1" },
     count: { type: "string", default: "1" },
     template: { type: "string" },
+    "tasks-per-bank": { type: "string" },
     "agent-model": { type: "string", default: DEFAULT_MODEL },
     "user-model": { type: "string", default: DEFAULT_MODEL },
     server: { type: "string" },
@@ -58,7 +60,11 @@ try {
       console.error(`seed ${seed}: invalid bank\n  ${errors.join("\n  ")}`);
       continue;
     }
-    const tasks = buildTasks(bank).filter((t) => !values.template || t.template === values.template);
+    const wanted = values["tasks-per-bank"] ? Number(values["tasks-per-bank"]) : 0;
+    const keep = (t: { template: string }) => !values.template || t.template === values.template;
+    let tasks = buildTasks(bank).filter(keep);
+    for (let variant = 1; tasks.length > 0 && tasks.length < wanted; variant++) tasks.push(...buildTasks(bank, variant).filter(keep));
+    if (wanted > 0) tasks = tasks.slice(0, wanted);
     const { config, docs } = bank;
     writeJson(join(runDir, "banks", `${seed}.json`), { seed, config, docs, agentPrompt: agentSystemPrompt(config, docs) });
     for (const task of tasks) {
