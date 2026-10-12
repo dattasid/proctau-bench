@@ -1,9 +1,10 @@
 // Bank config schema: the single source of truth for documents, executor and tasks.
 // Amounts are in dollars, rates are APY percentages (2.5 means 2.5%).
 
-export type Family = "checking" | "savings";
+export type AccountType = "checking" | "savings";
+export const ACCOUNT_TYPES: readonly AccountType[] = ["checking", "savings"];
 export type Tier = "basic" | "premium";
-export type ProductId = `${Family}_${Tier}`;
+export type ProductId = `${AccountType}_${Tier}`;
 
 export const PRODUCT_IDS: readonly ProductId[] = [
   "checking_basic",
@@ -43,7 +44,7 @@ export interface InterestBonus {
 
 export interface Product {
   id: ProductId;
-  family: Family;
+  accountType: AccountType;
   tier: Tier;
   displayName: string;
   minOpeningDeposit: number;

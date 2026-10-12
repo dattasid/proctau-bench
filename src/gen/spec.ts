@@ -2,7 +2,7 @@
 // sample.ts and sample_db.ts only read this. Ranges are [min, max, step]; a `...Chance` is
 // the probability of the named case. Money is in dollars, rates in percent.
 
-import type { WaiverCondition } from "../bank/schema.ts";
+import type { AccountType, WaiverCondition } from "../bank/schema.ts";
 
 export type Range = readonly [min: number, max: number, step: number];
 
@@ -13,9 +13,9 @@ export interface Odds {
   top: number;
 }
 
-// How one product family is built tier by tier. The bottom tier samples from the anchors;
+// How one account type is built tier by tier. The bottom tier samples from the anchors;
 // every higher tier adds a step to the tier below, so it dominates by construction.
-export interface FamilySpec {
+export interface AccountTypeSpec {
   minOpeningDeposit: { anchor: Range; step: Range };
   fee: { anchor: Range; step: Range; free: Odds };
   waiver: {
@@ -59,10 +59,10 @@ export const SPEC = {
     seniorMinAge: [62, 67, 1],
   },
 
-  // Product tiers from lowest to highest. Each family has one product per tier.
+  // Product tiers from lowest to highest. Each account type has one product per tier.
   tiers: ["basic", "premium"],
 
-  families: {
+  accountTypes: {
     checking: {
       minOpeningDeposit: { anchor: [0, 100, 25], step: [500, 5000, 500] },
       fee: { anchor: [5, 15, 1], step: [5, 20, 1], free: { bottom: 0, top: 0 } },
@@ -89,9 +89,9 @@ export const SPEC = {
       },
       bonus: { bottom: 0.5, top: 0.5 },
     },
-  } satisfies Record<"checking" | "savings", FamilySpec>,
+  } satisfies Record<AccountType, AccountTypeSpec>,
 
-  // Shape of tiered (balance-band) interest, for any family whose interest is tiered.
+  // Shape of tiered (balance-band) interest, for any account type whose interest is tiered.
   interestTiers: {
     firstTierMinBalance: [5000, 25000, 5000],
     apyStep: [0.1, 0.75, 0.05],

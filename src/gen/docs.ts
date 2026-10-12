@@ -104,7 +104,7 @@ function eligibilityText(config: BankConfig): string {
 }
 
 function productSheet(config: BankConfig, p: Product, say: Say): Doc {
-  const kind = p.family === "checking" ? "checking" : "savings";
+  const kind = p.accountType === "checking" ? "checking" : "savings";
   const intro =
     p.tier === "basic"
       ? say(`${p.displayName} is our everyday ${kind} account.`, `${p.displayName} is ${config.bank.name}'s standard ${kind} account.`)

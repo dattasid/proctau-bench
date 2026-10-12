@@ -2,8 +2,8 @@
 // guards against sampler bugs and against hand-edited configs.
 
 import { highestApy, lowestApy } from "./rules.ts";
-import { PRODUCT_IDS } from "./schema.ts";
-import type { BankConfig, Family, Product } from "./schema.ts";
+import { ACCOUNT_TYPES, PRODUCT_IDS } from "./schema.ts";
+import type { BankConfig, Product } from "./schema.ts";
 
 function minBalanceWaiver(p: Product): number | null {
   const c = p.monthlyFee.waiver.conditions.find((x) => x.kind === "min_balance");
@@ -26,7 +26,7 @@ export function validateBank(config: BankConfig): string[] {
     const waiver = p.monthlyFee.waiver;
     if (p.monthlyFee.amount === 0 && waiver.conditions.length > 0) err(`${id}: waiver on a zero fee`);
     if (waiver.conditions.length === 0 && waiver.logic !== "any") err(`${id}: empty "all" waiver would waive every fee`);
-    if (p.family === "checking" && p.bonuses.length > 0) err(`${id}: checking accounts have no interest bonus in this schema`);
+    if (p.accountType === "checking" && p.bonuses.length > 0) err(`${id}: checking accounts have no interest bonus in this schema`);
     if (p.interest.structure === "tiered") {
       const tiers = p.interest.tiers;
       if (tiers[0]?.minBalance !== 0) err(`${id}: first tier must start at 0`);
@@ -38,18 +38,17 @@ export function validateBank(config: BankConfig): string[] {
   }
   if (errors.length > 0) return errors;
 
-  const families: Family[] = ["checking", "savings"];
-  for (const family of families) {
-    const basic = config.products[`${family}_basic`];
-    const premium = config.products[`${family}_premium`];
+  for (const accountType of ACCOUNT_TYPES) {
+    const basic = config.products[`${accountType}_basic`];
+    const premium = config.products[`${accountType}_premium`];
     if (lowestApy(premium.interest) <= highestApy(basic.interest) && highestApy(premium.interest) > 0) {
-      err(`${family}: premium lowest rate must beat basic highest rate`);
+      err(`${accountType}: premium lowest rate must beat basic highest rate`);
     }
-    if (premium.minOpeningDeposit <= basic.minOpeningDeposit) err(`${family}: premium opening deposit must exceed basic`);
-    if (premium.monthlyFee.amount < basic.monthlyFee.amount) err(`${family}: premium fee below basic`);
+    if (premium.minOpeningDeposit <= basic.minOpeningDeposit) err(`${accountType}: premium opening deposit must exceed basic`);
+    if (premium.monthlyFee.amount < basic.monthlyFee.amount) err(`${accountType}: premium fee below basic`);
     const bw = minBalanceWaiver(basic);
     const pw = minBalanceWaiver(premium);
-    if (bw !== null && pw !== null && pw <= bw) err(`${family}: premium waiver balance must exceed basic`);
+    if (bw !== null && pw !== null && pw <= bw) err(`${accountType}: premium waiver balance must exceed basic`);
   }
 
   const elig = config.policies.premiumSavingsEligibility;

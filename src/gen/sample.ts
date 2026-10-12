@@ -4,9 +4,10 @@
 
 import type { Rng } from "../util/rng.ts";
 import { highestApy } from "../bank/rules.ts";
+import { ACCOUNT_TYPES } from "../bank/schema.ts";
 import type {
   BankConfig,
-  Family,
+  AccountType,
   Interest,
   InterestBonus,
   MonthlyFee,
@@ -15,7 +16,7 @@ import type {
   WaiverCondition,
 } from "../bank/schema.ts";
 import { SPEC } from "./spec.ts";
-import type { FamilySpec, Odds, Range } from "./spec.ts";
+import type { AccountTypeSpec, Odds, Range } from "./spec.ts";
 
 const round3 = (x: number): number => Math.round(x * 1000) / 1000;
 
@@ -24,15 +25,15 @@ function simulatedDate(rng: Rng): string {
   return new Date(Date.UTC(SPEC.bank.simulatedYear, 0, 1 + day)).toISOString().slice(0, 10);
 }
 
-function title(family: Family): string {
-  return family === "checking" ? "Checking" : "Savings";
+function title(accountType: AccountType): string {
+  return accountType === "checking" ? "Checking" : "Savings";
 }
 
 function scaled(r: Range, factor: number): Range {
   return [r[0] * factor, r[1] * factor, r[2] * factor];
 }
 
-function waiverConditions(rng: Rng, kinds: FamilySpec["waiver"]["kinds"], minBalance: Range): WaiverCondition[] {
+function waiverConditions(rng: Rng, kinds: AccountTypeSpec["waiver"]["kinds"], minBalance: Range): WaiverCondition[] {
   const spec = SPEC.monthlyFee;
   const measure = rng.pick(spec.balanceMeasures);
   const pool = kinds.map((kind): WaiverCondition => {
@@ -67,11 +68,11 @@ function tieredInterest(rng: Rng, base: number): Interest {
   return { structure: "tiered", appliesTo: rng.pick(spec.appliesTo), tiers };
 }
 
-// One product of any family at any tier. `below` is the same family's product one tier
-// down (null for the bottom tier); every value either comes from the family's anchors or
+// One product of any account type at any tier. `below` is the same account type's product one tier
+// down (null for the bottom tier); every value either comes from the account type's anchors or
 // steps up from `below`, which is what makes higher tiers dominate.
-function sampleProduct(rng: Rng, family: Family, position: number, below: Product | null, name: string): Product {
-  const spec: FamilySpec = SPEC.families[family];
+function sampleProduct(rng: Rng, accountType: AccountType, position: number, below: Product | null, name: string): Product {
+  const spec: AccountTypeSpec = SPEC.accountTypes[accountType];
   const count = SPEC.tiers.length;
   const rank = count > 1 ? position / (count - 1) : 0;
   const chance = (o: Odds) => o.bottom + (o.top - o.bottom) * rank;
@@ -102,10 +103,10 @@ function sampleProduct(rng: Rng, family: Family, position: number, below: Produc
 
   const tier = SPEC.tiers[position]!;
   return {
-    id: `${family}_${tier}`,
-    family,
+    id: `${accountType}_${tier}`,
+    accountType,
     tier,
-    displayName: `${name} ${title(family)}`,
+    displayName: `${name} ${title(accountType)}`,
     minOpeningDeposit,
     monthlyFee,
     interest,
@@ -117,10 +118,10 @@ function sampleProducts(rng: Rng): BankConfig["products"] {
   const scheme = rng.pick(SPEC.bank.nameSchemes);
   const names = SPEC.tiers.map((_, i) => rng.pick(scheme[i]!));
   const products: Partial<BankConfig["products"]> = {};
-  for (const family of ["checking", "savings"] as const) {
+  for (const accountType of ACCOUNT_TYPES) {
     let below: Product | null = null;
     SPEC.tiers.forEach((_, position) => {
-      const p = sampleProduct(rng, family, position, below, names[position]!);
+      const p = sampleProduct(rng, accountType, position, below, names[position]!);
       products[p.id] = p;
       below = p;
     });
