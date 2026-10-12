@@ -42,6 +42,8 @@ function goalSentence(goal: Goal): string {
       );
     case "request_service":
       return `I'd like to ${goal.request}.`;
+    case "transfer_funds":
+      return `I'd like to move ${money(goal.amount)} from my ${goal.from} account to my ${goal.to} account.`;
   }
 }
 
@@ -55,6 +57,8 @@ function goalValues(goal: Goal): string[] {
       return [goal.account, money(goal.amount), goal.merchant];
     case "request_service":
       return [];
+    case "transfer_funds":
+      return [goal.from, goal.to, money(goal.amount)];
   }
 }
 

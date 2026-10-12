@@ -31,7 +31,14 @@ export interface ServiceGoal {
   request: string; // what the customer says they want, e.g. "order a book of paper checks"
 }
 
-export type Goal = OpenGoal | RefundGoal | ReportGoal | ServiceGoal;
+export interface TransferGoal {
+  action: "transfer_funds";
+  from: string; // display name of the account the money leaves
+  to: string; // display name of the account it goes to
+  amount: number;
+}
+
+export type Goal = OpenGoal | RefundGoal | ReportGoal | ServiceGoal | TransferGoal;
 
 // Situations the engine recognizes in an agent turn, from the extracted acts.
 export const TRIGGERS = [
@@ -92,10 +99,10 @@ export interface CustomerScript {
   // This task's own reactions; the shared table (engine.ts) covers every other trigger. The nth time
   // a trigger fires, the nth reply is used; the last one repeats.
   reactions: Partial<Record<Trigger, Reply[]>>;
-  expectedEnding: "account_opened" | "refused_with_date" | "fee_refunded" | "transferred";
+  expectedEnding: "account_opened" | "refused_with_date" | "fee_refunded" | "transferred" | "funds_moved" | "refused";
   // What is actually true, for checking what the agent mentions. Written by the template, which built
   // the situation and so knows it.
-  truth: OpeningTruth | FeeTruth | HandoverTruth;
+  truth: OpeningTruth | FeeTruth | HandoverTruth | TransferTruth;
 }
 
 export interface OpeningTruth {
@@ -105,6 +112,13 @@ export interface OpeningTruth {
   unmet?: { required_account: string; min_age_days: number };
   eligible_date?: string;
   min_deposit: number;
+}
+
+export interface TransferTruth {
+  kind: "transfer";
+  limit: number | null; // transfers out of the source account allowed per month, if limited
+  used: number; // transfers out of it already this month
+  allowed: boolean;
 }
 
 export interface HandoverTruth {

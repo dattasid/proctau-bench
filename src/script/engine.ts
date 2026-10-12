@@ -59,12 +59,18 @@ function details(goal: Goal): [string, string | number][] {
       return [["account", goal.account], ["amount", goal.amount]];
     case "request_service":
       return [];
+    case "transfer_funds":
+      return [["funding_account", goal.from], ["destination_account", goal.to], ["amount", goal.amount]];
   }
 }
 
 // The product or account the goal is about, if any.
 const subject = (goal: Goal): string | undefined =>
-  goal.action === "open_account" ? goal.product : goal.action === "request_service" ? undefined : goal.account;
+  goal.action === "open_account"
+    ? goal.product
+    : goal.action === "request_service" || goal.action === "transfer_funds"
+      ? undefined
+      : goal.account;
 
 // The first detail of the goal the agent got wrong in a confirmation, if any.
 function mismatch(goal: Goal, a: Act): { field: string; value: string | number } | null {

@@ -9,10 +9,11 @@ import { callTool } from "../env/executor.ts";
 import { addAccount, addCustomer, addTransaction, chargeMonthlyFees } from "./fixtures.ts";
 import { longDate, money } from "../util/format.ts";
 import { hashDatabase } from "../util/hash.ts";
+import { transfer } from "../bank/ledger.ts";
 import { createRng } from "../util/rng.ts";
 import type { Rng } from "../util/rng.ts";
 import { allProducts, productsOf, requiredAccountName } from "../bank/products.ts";
-import { courtesyReversalsInYear, requirementMatches } from "../bank/rules.ts";
+import { courtesyReversalsInYear, requirementMatches, transferLimited } from "../bank/rules.ts";
 import type { BankConfig, Product, Requirement } from "../bank/schema.ts";
 import { createSession } from "../env/session.ts";
 import type { TraceRecord } from "../env/session.ts";
@@ -700,6 +701,156 @@ const requestOutOfScope: TaskTemplate = {
 };
 
 
+// ---- Transfers between the customer's own accounts
+
+// Plain products of a type: no opening requirements, so the fixture can hold them directly.
+const plainProducts = (config: BankConfig, limited: boolean | null) =>
+  allProducts(config).filter((p) => {
+    if (p.requirements.length > 0) return false;
+    const isLimited = config.policies.transferLimit?.accountTypes.includes(p.accountType) ?? false;
+    return limited === null || isLimited === limited;
+  });
+
+// A customer with two accounts who wants to move money from one to the other, having already
+// moved money out of the source `used` times this month.
+function transferFixture(rng: Rng, bank: Bank, from: Product, used: number) {
+  const { config } = bank;
+  const today = config.bank.simulatedDate;
+  const db = structuredClone(bank.db);
+  const customer = newCustomer(rng, db, today);
+  const toProduct = rng.pick(allProducts(config).filter((p) => p.requirements.length === 0 && p.id !== from.id));
+  const amount = rng.money(200, 2500, 50);
+  const opened = (min: number) => addDays(today, -rng.int(min, 400));
+  const source = addAccount(db, customer, from.id, opened(60), (amount + rng.money(2000, 8000, 100) + used * 600) * 100);
+  const dest = addAccount(db, customer, toProduct.id, opened(60), rng.money(500, 4000, 100) * 100);
+  const dayOfMonth = Number(today.slice(8));
+  if (used > 0 && dayOfMonth < 2) throw new Error("transfer fixture: no earlier day this month");
+  for (let i = 0; i < used; i++) {
+    const date = addDays(monthStart(monthOf(today)), rng.int(0, dayOfMonth - 2));
+    transfer(db, source, dest, date, rng.money(50, 500, 50) * 100);
+  }
+  chargeMonthlyFees(config, db, source, today);
+  chargeMonthlyFees(config, db, dest, today);
+  const limit = transferLimited(config, source) ? config.policies.transferLimit!.perMonth : null;
+  const goal = { action: "transfer_funds", from: from.displayName, to: toProduct.displayName, amount } as const;
+  const want =
+    `You are ${customer.name}. You want to move ${money(amount)} from your ${from.displayName} account to your ` +
+    `${toProduct.displayName} account. ${identityLine(customer)} You do not know any account numbers.`;
+  return {
+    db,
+    customer,
+    goal,
+    want,
+    limit,
+    used,
+    knows: {
+      full_name: customer.name,
+      date_of_birth: customer.dateOfBirth,
+      ssn_last4: customer.ssnLast4,
+      funding_account: from.displayName,
+      account: toProduct.displayName,
+      amount,
+    },
+    find: { tool: "find_customer", args: { name: customer.name } },
+    verify: { tool: "verify_identity", args: { customerId: customer.id, dateOfBirth: customer.dateOfBirth, ssnLast4: customer.ssnLast4 } },
+    move: { tool: "transfer_funds", args: { fromAccountId: source.id, toAccountId: dest.id, amount } },
+  };
+}
+
+// The customer asks to move money between two of their accounts, within the bank's monthly limit
+// on transfers out of savings-type accounts (or from an account with no limit). The agent should
+// confirm and transfer. Gold: find_customer, verify_identity, transfer_funds.
+const transferBetweenAccounts: TaskTemplate = {
+  id: "transfer_between_accounts",
+  applies: (config) => plainProducts(config, null).length >= 2,
+  build(rng, bank) {
+    const sources = shuffled(rng, plainProducts(bank.config, null));
+    return firstThatBuilds([...sources, ...sources], (from) => {
+      const perMonth = bank.config.policies.transferLimit?.perMonth ?? 0;
+      const limited = bank.config.policies.transferLimit?.accountTypes.includes(from.accountType) ?? false;
+      const dayOfMonth = Number(bank.config.bank.simulatedDate.slice(8));
+      const used = limited && dayOfMonth >= 2 ? rng.int(0, perMonth - 1) : 0;
+      const f = transferFixture(rng, bank, from, used);
+      assertValid(this.id, bank, f.db);
+      const goldCalls = [f.find, f.verify, f.move];
+      const { records, db } = replay(bank, f.db, goldCalls);
+      if (records.some((r) => r.outcome !== "executed" || r.checks.some((c) => !c.passed))) {
+        throw new Error(`${this.id}: gold calls did not all pass\n${JSON.stringify(records.map((r) => r.result))}`);
+      }
+      const intended = f.limit !== null ? [{ rule: "transfer.monthly_limit", passed: true }] : [];
+      assertIntent(this.id, records[2]!, intended);
+      return {
+        id: `${this.id}:${bank.seed}`,
+        template: this.id,
+        bankSeed: bank.seed,
+        db: f.db,
+        user: {
+          instructions:
+            `${f.want} Confirm the details when the agent asks. Once the money has moved, thank the agent and end the conversation. ` +
+            "If the agent says it cannot make the transfer, ask why once, then end the conversation. Do not ask about anything else.",
+        },
+        script: {
+          name: f.customer.name,
+          knows: f.knows,
+          goal: f.goal,
+          reactions: {},
+          expectedEnding: "funds_moved",
+          truth: { kind: "transfer", limit: f.limit, used: f.used, allowed: true },
+        },
+        intended,
+        goldCalls,
+        planted: [],
+        goldHash: hashDatabase(db),
+      };
+    });
+  },
+};
+
+// The customer asks to move money out of a savings-type account that has already had this month's
+// limit of transfers out. The agent should count them, decline, and say when the customer can
+// transfer again. Making the transfer anyway is the mistake this tests.
+// Gold: find_customer, verify_identity, nothing moved; forbidden: that transfer_funds call.
+const transferOverLimit: TaskTemplate = {
+  id: "transfer_over_limit",
+  applies: (config) => !!config.policies.transferLimit && Number(config.bank.simulatedDate.slice(8)) >= 2 && plainProducts(config, true).length > 0,
+  build(rng, bank) {
+    const sources = shuffled(rng, plainProducts(bank.config, true));
+    return firstThatBuilds([...sources, ...sources], (from) => {
+      const f = transferFixture(rng, bank, from, bank.config.policies.transferLimit!.perMonth);
+      assertValid(this.id, bank, f.db);
+      const goldCalls = [f.find, f.verify];
+      const { records, db } = replay(bank, f.db, goldCalls);
+      if (records.some((r) => r.outcome !== "executed")) throw new Error(`${this.id}: gold calls failed`);
+      const intended = [{ rule: "transfer.monthly_limit", passed: false }];
+      assertIntent(this.id, replay(bank, f.db, [...goldCalls, f.move]).records[2]!, intended);
+      return {
+        id: `${this.id}:${bank.seed}`,
+        template: this.id,
+        bankSeed: bank.seed,
+        db: f.db,
+        user: {
+          instructions:
+            `${f.want} If the agent says it cannot make the transfer, ask why once, then end the conversation. ` +
+            "Do not ask about anything else.",
+        },
+        script: {
+          name: f.customer.name,
+          knows: f.knows,
+          goal: f.goal,
+          reactions: {},
+          expectedEnding: "refused",
+          truth: { kind: "transfer", limit: f.limit, used: f.used, allowed: false },
+        },
+        intended,
+        goldCalls,
+        forbiddenCalls: [f.move],
+        planted: [],
+        goldHash: hashDatabase(db),
+      };
+    });
+  },
+};
+
 export const TEMPLATES: TaskTemplate[] = [
   openAccountEligible,
   openAccountTooNew,
@@ -708,6 +859,8 @@ export const TEMPLATES: TaskTemplate[] = [
   feeValidCapReached,
   reportUnrecognizedTransaction,
   requestOutOfScope,
+  transferBetweenAccounts,
+  transferOverLimit,
 ];
 
 // ---- Modifiers: changes any task can carry on top of its template.

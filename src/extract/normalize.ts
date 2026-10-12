@@ -11,7 +11,7 @@ export interface Names {
   accountTypes: string[]; // as customers say them, e.g. "checking", "business savings"
 }
 
-const NAME_ARGS = new Set(["product", "account", "funding_account", "required_account"]);
+const NAME_ARGS = new Set(["product", "account", "funding_account", "destination_account", "required_account"]);
 // Free-text arguments vary in wording between samples; only their presence is compared.
 const FREE_TEXT = new Set(["detail", "reason"]);
 
