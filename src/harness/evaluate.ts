@@ -4,7 +4,17 @@
 import type { TraceRecord } from "../env/session.ts";
 import type { Task } from "../gen/tasks.ts";
 
-export type EndReason = "user_stop" | "user_transfer" | "out_of_scope" | "agent_transfer" | "max_turns" | "tool_limit";
+// off_script: the scripted customer met a turn it could not understand; such runs are not scored.
+// agent_ended: the agent said goodbye or handed over, as understood by the scripted customer.
+export type EndReason =
+  | "user_stop"
+  | "user_transfer"
+  | "out_of_scope"
+  | "agent_transfer"
+  | "agent_ended"
+  | "off_script"
+  | "max_turns"
+  | "tool_limit";
 
 export interface Evaluation {
   dbMatch: boolean;

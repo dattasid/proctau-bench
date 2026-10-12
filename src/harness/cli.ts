@@ -1,5 +1,6 @@
 // Usage: npm run harness -- [--seed N] [--count K] [--template ID] [--tasks-per-bank T]
 //          [--agent-model M] [--user-model M] [--server URL] [--out DIR]
+//          [--customer llm|scripted] [--extract-samples N]
 // --tasks-per-bank: draw more task variants until each bank has T tasks (default: one per template).
 // Generates banks and tasks, runs each task as a conversation against the executor
 // (an in-process server unless --server is given) and writes one JSON file per run.
@@ -23,6 +24,8 @@ const { values } = parseArgs({
     count: { type: "string", default: "1" },
     template: { type: "string" },
     "tasks-per-bank": { type: "string" },
+    customer: { type: "string", default: "llm" },
+    "extract-samples": { type: "string", default: "1" },
     "agent-model": { type: "string", default: DEFAULT_MODEL },
     "user-model": { type: "string", default: DEFAULT_MODEL },
     server: { type: "string" },
@@ -48,6 +51,8 @@ const meta: Record<string, unknown> = {
   template: values.template ?? null,
   agentModel: values["agent-model"],
   userModel: values["user-model"],
+  customer: values.customer,
+  extractSamples: Number(values["extract-samples"]),
 };
 writeJson(join(runDir, "meta.json"), meta);
 
@@ -75,6 +80,8 @@ try {
           apiKey,
           agentModel: values["agent-model"],
           userModel: values["user-model"],
+          customer: values.customer === "scripted" ? "scripted" : "llm",
+          extractSamples: Number(values["extract-samples"]),
         });
         writeJson(join(runDir, `${task.id.replace(/:/g, "_")}.json`), { task, result });
         const e = result.evaluation;
@@ -84,7 +91,8 @@ try {
           ...e.violations.map((v) => `violated ${v.rule}`),
           ...e.blockedAttempts.map((v) => `blocked ${v.rule}`),
         ].filter(Boolean);
-        console.log(`${e.pass ? "PASS" : "FAIL"} ${task.id} (${e.endReason}, ${e.counts.calls} calls)${issues.length ? ": " + issues.join("; ") : ""}`);
+        const verdict = e.endReason === "off_script" ? "OFF-SCRIPT" : e.pass ? "PASS" : "FAIL";
+        console.log(`${verdict} ${task.id} (${e.endReason}, ${e.counts.calls} calls)${issues.length ? ": " + issues.join("; ") : ""}`);
       } catch (err) {
         console.error(`ERROR ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
       }

@@ -1,0 +1,72 @@
+// A scripted customer: what they know, what they want, and how they react to what the agent does.
+// Templates write one per task; the engine (engine.ts) reads it after every agent turn and decides
+// the customer's next move; the rephraser (rephrase.ts) only puts that move into words.
+
+import type { InfoField } from "../extract/vocab.ts";
+
+export interface Goal {
+  action: "open_account";
+  product: string; // display name
+  amount: number; // dollars
+  funding_account: string; // display name of the customer's account
+}
+
+// Situations the engine recognizes in an agent turn, from the extracted acts.
+export const TRIGGERS = [
+  "transferred", // the agent hands over to a human
+  "closing", // the agent says goodbye
+  "done", // the agent reports the goal action done
+  "date_given", // the agent gives the date from which the customer can open the product
+  "refused", // the agent says the customer is not eligible, or the goal action was not done
+  "confirm_mismatch", // the agent asks to confirm an action that differs from the goal
+  "confirm_matches", // the agent asks to confirm the goal action
+  "alternative", // the agent suggests something else
+  "more_help", // the agent asks if there is anything else
+  "greeted", // the agent greets
+  "statement", // anything else the engine understood, with nothing to answer
+] as const;
+export type Trigger = (typeof TRIGGERS)[number];
+
+// What the customer can do in reply. `end` ends the conversation without a message.
+export type Reply =
+  | "state_goal"
+  | "confirm"
+  | "correct"
+  | "decline"
+  | "ask_why"
+  | "ask_when_eligible"
+  | "acknowledge"
+  | "thank_and_end"
+  | "end";
+
+export type CustomerAct =
+  | { act: "state_goal"; goal: Goal }
+  | { act: "give_info"; field: InfoField; value: string | number }
+  | { act: "dont_have"; field: InfoField }
+  | { act: "confirm" }
+  | { act: "correct"; field: keyof Goal; value: string | number }
+  | { act: "decline"; goal: Goal }
+  | { act: "ask_why" }
+  | { act: "ask_when_eligible" }
+  | { act: "acknowledge" }
+  | { act: "thank_and_end" };
+
+export interface CustomerScript {
+  name: string;
+  // Details the customer can give when asked. Anything else, they don't have.
+  knows: Partial<Record<InfoField, string | number>>;
+  goal: Goal;
+  // This task's own reactions; the shared table (engine.ts) covers every other trigger. The nth time
+  // a trigger fires, the nth reply is used; the last one repeats.
+  reactions: Partial<Record<Trigger, Reply[]>>;
+  expectedEnding: "account_opened" | "refused_with_date";
+  // What is actually true, for checking what the agent mentions. Written by the template, which built
+  // the situation and so knows it.
+  truth: {
+    requirements: { required_account: string; min_age_days: number }[];
+    eligible: boolean;
+    unmet?: { required_account: string; min_age_days: number };
+    eligible_date?: string;
+    min_deposit: number;
+  };
+}

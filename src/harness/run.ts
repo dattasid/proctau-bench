@@ -1,6 +1,10 @@
 // One conversation: the user simulator and the agent take turns, the agent's tool
 // calls go to the executor over REST, and the result is evaluated against the task.
 // Half-duplex, like tau2's orchestrator: the agent greets first.
+//
+// The customer is either an LLM following the task's prose instructions, or scripted: each agent
+// turn is extracted into acts, the script engine picks the customer's reply from the task's
+// script, and the rephraser puts it into words.
 
 import type { Bank } from "../gen/generate.ts";
 import type { TraceRecord } from "../env/session.ts";
@@ -8,6 +12,12 @@ import type { Task } from "../gen/tasks.ts";
 import { EnvClient } from "./env_client.ts";
 import { evaluate } from "./evaluate.ts";
 import type { EndReason, Evaluation } from "./evaluate.ts";
+import { accountTypeName } from "../bank/products.ts";
+import { extractRepeated } from "../extract/extract.ts";
+import type { Act, ExtractContext } from "../extract/extract.ts";
+import { newState, step } from "../script/engine.ts";
+import { rephrase } from "../script/rephrase.ts";
+import type { CustomerAct, Trigger } from "../script/types.ts";
 import { chat } from "./llm.ts";
 import type { ChatMessage, ChatTool } from "./llm.ts";
 import { GREETING, OUT_OF_SCOPE, STOP, TRANSFER, agentSystemPrompt, userSystemPrompt } from "./prompts.ts";
@@ -16,12 +26,25 @@ export type Turn =
   | { role: "agent" | "user"; content: string }
   | { role: "tool"; tool: string; args: unknown; result: unknown; outcome: string };
 
+// One scripted customer turn: what was extracted from the agent and what the script decided.
+export interface ScriptTurn {
+  agent: string;
+  acts: Act[]; // the agent's acts (the vote across samples when there are several)
+  conflicts: string[];
+  trigger: Trigger | null;
+  customer: CustomerAct[];
+  flags: string[];
+  draft?: string;
+  fellBack?: boolean; // the rephraser lost a value, so the draft was sent
+}
+
 export interface RunResult {
   taskId: string;
   agentModel: string;
   userModel: string;
   prompts: { agent: string; user: string }; // system prompts exactly as sent
   turns: Turn[];
+  script?: ScriptTurn[]; // scripted customer only
   trace: TraceRecord[];
   notes: string[];
   finalHash: string;
@@ -35,6 +58,8 @@ export interface RunOptions {
   userModel: string;
   maxTurns?: number;
   maxToolCallsPerTurn?: number;
+  customer?: "llm" | "scripted";
+  extractSamples?: number; // scripted: extractor samples per agent turn, voted per act
 }
 
 const MARKERS: [string, EndReason][] = [
@@ -57,7 +82,11 @@ export async function runTask(bank: Bank, task: Task, opts: RunOptions): Promise
   const env = await EnvClient.create(opts.baseUrl, bank.config, task.db);
   const tools: ChatTool[] = (await env.tools()).map((t) => ({ type: "function", function: t }));
 
-  const prompts = { agent: agentSystemPrompt(bank.config, bank.docs), user: userSystemPrompt(task.user.instructions) };
+  const scripted = opts.customer === "scripted";
+  const prompts = {
+    agent: agentSystemPrompt(bank.config, bank.docs),
+    user: scripted ? `(scripted customer)\n${JSON.stringify(task.script, null, 2)}` : userSystemPrompt(task.user.instructions),
+  };
   const agentMsgs: ChatMessage[] = [{ role: "system", content: prompts.agent }];
   // The simulator plays the customer, so roles are mirrored in its history.
   const userMsgs: ChatMessage[] = [{ role: "system", content: prompts.user }];
@@ -68,18 +97,51 @@ export async function runTask(bank: Bank, task: Task, opts: RunOptions): Promise
     turns.push({ role: "agent", content: text });
   };
 
+  // The LLM customer: replies from its instructions, ending with a marker.
+  const llmCustomer = async (): Promise<{ said: string; end: EndReason | null }> => {
+    const reply = await chat(opts.apiKey, opts.userModel, userMsgs, { temperature: 0 });
+    const text = (reply.content ?? "").trim();
+    userMsgs.push({ role: "assistant", content: text });
+    const marker = MARKERS.find(([m]) => text.includes(m));
+    return { said: MARKERS.reduce((s, [m]) => s.split(m).join(""), text).trim(), end: marker ? marker[1] : null };
+  };
+
+  // The scripted customer: extract the agent's last turn, let the engine decide, rephrase.
+  const scriptLog: ScriptTurn[] = [];
+  const engineState = newState();
+  const names: Pick<ExtractContext, "bankName" | "products" | "accountTypes"> = {
+    bankName: bank.config.bank.name,
+    products: Object.values(bank.config.products).map((p) => p.displayName),
+    accountTypes: bank.config.accountTypes.map(accountTypeName),
+  };
+  const scriptedCustomer = async (): Promise<{ said: string; end: EndReason | null }> => {
+    const said = turns.filter((t): t is { role: "agent" | "user"; content: string } => t.role !== "tool");
+    const agentText = said.at(-1)!.content;
+    let acts: Act[] = [{ act: "greet", args: {}, quote: GREETING }];
+    let conflicts: string[] = [];
+    if (agentText !== GREETING) {
+      const r = await extractRepeated(opts.apiKey, opts.userModel, { ...names, history: said.slice(-7, -1) }, agentText, opts.extractSamples ?? 1);
+      acts = r.consensus;
+      conflicts = r.conflicts;
+    }
+    const s = step(task.script, engineState, acts);
+    const entry: ScriptTurn = { agent: agentText, acts, conflicts, trigger: s.trigger, customer: s.acts, flags: s.flags };
+    scriptLog.push(entry);
+    if (s.acts.length === 0) return { said: "", end: s.end === "off_script" ? "off_script" : "agent_ended" };
+    const r = await rephrase(opts.apiKey, opts.userModel, task.script, agentText, s.acts);
+    entry.draft = r.draft;
+    entry.fellBack = r.fellBack;
+    return { said: r.text, end: s.end === "user_stop" ? "user_stop" : null };
+  };
+
   let endReason: EndReason = "max_turns";
   try {
     agentSays(GREETING);
     conversation: for (let turn = 0; turn < maxTurns; turn++) {
-      const reply = await chat(opts.apiKey, opts.userModel, userMsgs, { temperature: 0 });
-      const text = (reply.content ?? "").trim();
-      userMsgs.push({ role: "assistant", content: text });
-      const marker = MARKERS.find(([m]) => text.includes(m));
-      const said = MARKERS.reduce((s, [m]) => s.split(m).join(""), text).trim();
+      const { said, end } = scripted ? await scriptedCustomer() : await llmCustomer();
       if (said) turns.push({ role: "user", content: said });
-      if (marker) {
-        endReason = marker[1];
+      if (end) {
+        endReason = end;
         break;
       }
       agentMsgs.push({ role: "user", content: said });
@@ -117,6 +179,7 @@ export async function runTask(bank: Bank, task: Task, opts: RunOptions): Promise
       userModel: opts.userModel,
       prompts,
       turns,
+      ...(scripted ? { script: scriptLog } : {}),
       trace,
       notes,
       finalHash: hash,

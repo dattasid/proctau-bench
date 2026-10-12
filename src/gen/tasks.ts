@@ -11,13 +11,14 @@ import { longDate, money } from "../util/format.ts";
 import { hashDatabase } from "../util/hash.ts";
 import { createRng } from "../util/rng.ts";
 import type { Rng } from "../util/rng.ts";
-import { allProducts, productsOf } from "../bank/products.ts";
+import { allProducts, productsOf, requiredAccountName } from "../bank/products.ts";
 import { requirementMatches } from "../bank/rules.ts";
 import type { BankConfig, Product, Requirement } from "../bank/schema.ts";
 import { createSession } from "../env/session.ts";
 import type { TraceRecord } from "../env/session.ts";
 import type { Account, Customer, Database } from "../bank/state.ts";
 import { validateDatabase } from "../bank/validate_db.ts";
+import type { CustomerScript } from "../script/types.ts";
 
 export interface ExpectedCall {
   tool: string;
@@ -30,6 +31,7 @@ export interface Task {
   bankSeed: number;
   db: Database; // starting database: background customers plus the fixture
   user: { instructions: string }; // private to the user simulator
+  script: CustomerScript; // the same customer for the scripted simulator, with what is true
   intended: { rule: string; passed: boolean }[]; // the rule branch this task targets
   goldCalls: ExpectedCall[]; // one correct sequence; others may be equally valid
   forbiddenCalls?: ExpectedCall[]; // calls that break the targeted rule, replayed to confirm the task hits it
@@ -181,7 +183,30 @@ function openingFixture(rng: Rng, bank: Bank, target: Product, tooNew: Requireme
     `You are ${customer.name}. You want to open a ${target.displayName} account ` +
     `and fund it with ${money(deposit)} from your ${fundingProduct.displayName} account. ` +
     `${identityLine(customer)} You do not know any account numbers.`;
-  return { db, customer, funding, deposit, verify, open, want, find: { tool: "find_customer", args: { name: customer.name } } };
+  const base = {
+    name: customer.name,
+    knows: {
+      full_name: customer.name,
+      date_of_birth: customer.dateOfBirth,
+      ssn_last4: customer.ssnLast4,
+      product: target.displayName,
+      amount: deposit,
+      funding_account: fundingProduct.displayName,
+    },
+    goal: { action: "open_account", product: target.displayName, amount: deposit, funding_account: fundingProduct.displayName } as const,
+    requirements: target.requirements.map((r) => ({ required_account: requiredAccountName(config, r), min_age_days: r.minAgeDays })),
+    min_deposit: target.minOpeningDeposit,
+  };
+  return { db, customer, funding, deposit, verify, open, want, base, find: { tool: "find_customer", args: { name: customer.name } } };
+}
+
+// The first day the customer holds an account that satisfies `r`.
+function satisfiedFrom(config: BankConfig, db: Database, customerId: string, r: Requirement): string {
+  const opened = Object.values(db.accounts)
+    .filter((a) => a.customerId === customerId && a.status === "open" && requirementMatches(config, a.productId, r))
+    .map((a) => a.openedOn)
+    .sort();
+  return addDays(opened[0]!, r.minAgeDays);
 }
 
 // Tries `attempts` in order and returns the first task that builds; throws the last error if none does.
@@ -228,6 +253,14 @@ const openAccountEligible: TaskTemplate = {
             `${f.want} Confirm the details when the agent asks. Once the account is open, thank the agent and end the conversation. ` +
             "If the agent says it cannot open the account, ask why once, then end the conversation. Do not ask about anything else.",
         },
+        script: {
+          name: f.base.name,
+          knows: f.base.knows,
+          goal: f.base.goal,
+          reactions: {}, // the shared table: ask why once if refused, then end
+          expectedEnding: "account_opened",
+          truth: { requirements: f.base.requirements, eligible: true, min_deposit: f.base.min_deposit },
+        },
         intended,
         goldCalls,
         goldHash: hashDatabase(db),
@@ -269,6 +302,20 @@ const openAccountTooNew: TaskTemplate = {
           instructions:
             `${f.want} If the agent says you are not eligible yet, ask when you will become eligible; once you have an answer, ` +
             "end the conversation. If the agent offers a different account instead, decline. Do not ask about anything else.",
+        },
+        script: {
+          name: f.base.name,
+          knows: f.base.knows,
+          goal: f.base.goal,
+          reactions: { refused: ["ask_when_eligible", "thank_and_end"], date_given: ["thank_and_end"], alternative: ["decline"] },
+          expectedEnding: "refused_with_date",
+          truth: {
+            requirements: f.base.requirements,
+            eligible: false,
+            unmet: { required_account: requiredAccountName(bank.config, requirement), min_age_days: requirement.minAgeDays },
+            eligible_date: satisfiedFrom(bank.config, f.db, f.customer.id, requirement),
+            min_deposit: f.base.min_deposit,
+          },
         },
         intended,
         goldCalls,
