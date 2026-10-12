@@ -97,6 +97,18 @@ export function premiumSavingsEligible(config: BankConfig, db: Database, custome
   );
 }
 
+export function lowestApy(interest: Interest): number {
+  if (interest.structure === "none") return 0;
+  if (interest.structure === "flat") return interest.apy;
+  return interest.tiers[0]!.apy;
+}
+
+export function highestApy(interest: Interest): number {
+  if (interest.structure === "none") return 0;
+  if (interest.structure === "flat") return interest.apy;
+  return interest.tiers.at(-1)!.apy;
+}
+
 // A year's interest at a constant balance: the quote the agent is expected to give.
 export function annualInterestCents(interest: Interest, balanceCents: number, apyBoost = 0): number {
   if (interest.structure === "none") return 0;

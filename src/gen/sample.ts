@@ -1,7 +1,9 @@
-// Samples a random but coherent bank from SPEC. Premium is built from Basic so that it
-// dominates on rate and limits and costs more to open and keep fee-free.
+// Samples a random but coherent bank from SPEC. Every product comes from one tier-generic
+// sampler: each tier steps up from the one below, so it dominates on rate and limits and
+// costs more to open and keep fee-free.
 
 import type { Rng } from "../util/rng.ts";
+import { highestApy } from "../bank/rules.ts";
 import type {
   BankConfig,
   Family,
@@ -13,7 +15,7 @@ import type {
   WaiverCondition,
 } from "../bank/schema.ts";
 import { SPEC } from "./spec.ts";
-import type { Range } from "./spec.ts";
+import type { FamilySpec, Odds, Range } from "./spec.ts";
 
 const round3 = (x: number): number => Math.round(x * 1000) / 1000;
 
@@ -26,117 +28,104 @@ function title(family: Family): string {
   return family === "checking" ? "Checking" : "Savings";
 }
 
-function waiverConditions(rng: Rng, family: Family, minBalance: Range): WaiverCondition[] {
+function scaled(r: Range, factor: number): Range {
+  return [r[0] * factor, r[1] * factor, r[2] * factor];
+}
+
+function waiverConditions(rng: Rng, kinds: FamilySpec["waiver"]["kinds"], minBalance: Range): WaiverCondition[] {
   const spec = SPEC.monthlyFee;
   const measure = rng.pick(spec.balanceMeasures);
-  const pool: WaiverCondition[] = [
-    { kind: "min_balance", amount: rng.money(...minBalance), measure },
-    family === "checking"
-      ? { kind: "direct_deposit", minMonthlyAmount: rng.money(...spec.directDepositMonthly) }
-      : { kind: "linked_account" },
-    { kind: "senior", minAge: rng.int(...spec.seniorMinAge) },
-  ];
+  const pool = kinds.map((kind): WaiverCondition => {
+    switch (kind) {
+      case "min_balance":
+        return { kind, amount: rng.money(...minBalance), measure };
+      case "direct_deposit":
+        return { kind, minMonthlyAmount: rng.money(...spec.directDepositMonthly) };
+      case "linked_account":
+        return { kind };
+      case "senior":
+        return { kind, minAge: rng.int(...spec.seniorMinAge) };
+    }
+  });
   return rng.subset(pool, ...spec.conditionCount);
 }
 
-function monthlyFee(rng: Rng, family: Family, amount: number, minBalance: Range): MonthlyFee {
-  if (amount === 0 || !rng.bool(SPEC.monthlyFee.waivableChance)) return { amount, waiver: { logic: "any", conditions: [] } };
-  return {
-    amount,
-    waiver: { logic: rng.pick(SPEC.monthlyFee.logics), conditions: waiverConditions(rng, family, minBalance) },
-  };
-}
-
-// Interest whose lowest rate is at least `floorApy`, returned with its top rate.
-function savingsInterest(rng: Rng, floorApy: number): { interest: Interest; topApy: number } {
-  const spec = SPEC.savings.interest;
-  const base = round3(floorApy + rng.rate(...spec.apyAboveFloor));
-  if (rng.bool(spec.flatChance)) return { interest: { structure: "flat", apy: base }, topApy: base };
-
+// Balance-band interest starting at `base`, each band paying more than the one below.
+function tieredInterest(rng: Rng, base: number): Interest {
+  const spec = SPEC.interestTiers;
   const t1 = rng.money(...spec.firstTierMinBalance);
   const tiers = [
     { minBalance: 0, apy: base },
-    { minBalance: t1, apy: round3(base + rng.rate(...spec.tierApyStep)) },
+    { minBalance: t1, apy: round3(base + rng.rate(...spec.apyStep)) },
   ];
   if (rng.bool(spec.thirdTierChance)) {
-    const prev = tiers[1]!.apy;
     tiers.push({
       minBalance: t1 + rng.money(...spec.thirdTierBalanceGap),
-      apy: round3(prev + rng.rate(...spec.tierApyStep)),
+      apy: round3(tiers[1]!.apy + rng.rate(...spec.apyStep)),
     });
   }
+  return { structure: "tiered", appliesTo: rng.pick(spec.appliesTo), tiers };
+}
+
+// One product of any family at any tier. `below` is the same family's product one tier
+// down (null for the bottom tier); every value either comes from the family's anchors or
+// steps up from `below`, which is what makes higher tiers dominate.
+function sampleProduct(rng: Rng, family: Family, position: number, below: Product | null, name: string): Product {
+  const spec: FamilySpec = SPEC.families[family];
+  const count = SPEC.tiers.length;
+  const rank = count > 1 ? position / (count - 1) : 0;
+  const chance = (o: Odds) => o.bottom + (o.top - o.bottom) * rank;
+  const stepUp = (from: number | undefined, r: { anchor: Range; step: Range }) =>
+    from === undefined ? rng.money(...r.anchor) : from + rng.money(...r.step);
+
+  const minOpeningDeposit = stepUp(below?.minOpeningDeposit, spec.minOpeningDeposit);
+  const feeAmount = rng.bool(chance(spec.fee.free)) ? 0 : stepUp(below?.monthlyFee.amount, spec.fee);
+  const minBalance = scaled(spec.waiver.minBalance, spec.waiver.minBalanceGrowth ** position);
+  const monthlyFee: MonthlyFee =
+    feeAmount === 0 || !rng.bool(SPEC.monthlyFee.waivableChance)
+      ? { amount: feeAmount, waiver: { logic: "any", conditions: [] } }
+      : {
+          amount: feeAmount,
+          waiver: { logic: rng.pick(SPEC.monthlyFee.logics), conditions: waiverConditions(rng, spec.waiver.kinds, minBalance) },
+        };
+
+  let interest: Interest = { structure: "none" };
+  if (!rng.bool(chance(spec.interest.none))) {
+    const start = below ? highestApy(below.interest) + rng.rate(...spec.interest.gapAboveBelow) : spec.interest.floor;
+    const base = round3(start + rng.rate(...spec.interest.spread));
+    interest = rng.bool(chance(spec.interest.tiered)) ? tieredInterest(rng, base) : { structure: "flat", apy: base };
+  }
+
+  const bonuses: InterestBonus[] = rng.bool(chance(spec.bonus))
+    ? [{ trigger: rng.pick(SPEC.bonus.triggers), apyBoost: rng.rate(...SPEC.bonus.apyBoost) }]
+    : [];
+
+  const tier = SPEC.tiers[position]!;
   return {
-    interest: { structure: "tiered", appliesTo: rng.pick(spec.appliesTo), tiers },
-    topApy: tiers.at(-1)!.apy,
+    id: `${family}_${tier}`,
+    family,
+    tier,
+    displayName: `${name} ${title(family)}`,
+    minOpeningDeposit,
+    monthlyFee,
+    interest,
+    bonuses,
   };
-}
-
-function savingsBonuses(rng: Rng): InterestBonus[] {
-  const spec = SPEC.savings.bonus;
-  if (!rng.bool(spec.chance)) return [];
-  return [{ trigger: rng.pick(spec.triggers), apyBoost: rng.rate(...spec.apyBoost) }];
-}
-
-function product(
-  family: Family,
-  tier: "basic" | "premium",
-  name: string,
-  fields: Omit<Product, "id" | "family" | "tier" | "displayName">,
-): Product {
-  return { id: `${family}_${tier}`, family, tier, displayName: `${name} ${title(family)}`, ...fields };
 }
 
 function sampleProducts(rng: Rng): BankConfig["products"] {
   const scheme = rng.pick(SPEC.bank.nameSchemes);
-  const basicName = rng.pick(scheme.basic);
-  const premiumName = rng.pick(scheme.premium);
-
-  // Checking: Basic may pay nothing; Premium always pays more than Basic.
-  const cb = SPEC.checking.basic;
-  const cp = SPEC.checking.premium;
-  const basicCheckingApy = rng.bool(cb.interestChance) ? rng.rate(...cb.apy) : 0;
-  const premiumCheckingApy = round3(basicCheckingApy + rng.rate(...cp.apyAboveBasic));
-  const basicCheckingFee = rng.money(...cb.fee);
-
-  const checkingBasic = product("checking", "basic", basicName, {
-    minOpeningDeposit: rng.money(...cb.minOpeningDeposit),
-    monthlyFee: monthlyFee(rng, "checking", basicCheckingFee, cb.waiverMinBalance),
-    interest: basicCheckingApy > 0 ? { structure: "flat", apy: basicCheckingApy } : { structure: "none" },
-    bonuses: [],
-  });
-  const checkingPremium = product("checking", "premium", premiumName, {
-    minOpeningDeposit: rng.money(...cp.minOpeningDeposit),
-    monthlyFee: monthlyFee(rng, "checking", basicCheckingFee + rng.money(...cp.feeAboveBasic), cp.waiverMinBalance),
-    interest: { structure: "flat", apy: premiumCheckingApy },
-    bonuses: [],
-  });
-
-  // Savings: Premium's lowest rate starts above Basic's highest rate.
-  const sb = SPEC.savings.basic;
-  const sp = SPEC.savings.premium;
-  const basicSavings = savingsInterest(rng, sb.apyFloor);
-  const premiumSavings = savingsInterest(rng, basicSavings.topApy + rng.rate(...sp.apyGapAboveBasicTop));
-  const basicSavingsFee = rng.bool(sb.freeChance) ? 0 : rng.money(...sb.fee);
-
-  const savingsBasic = product("savings", "basic", basicName, {
-    minOpeningDeposit: rng.money(...sb.minOpeningDeposit),
-    monthlyFee: monthlyFee(rng, "savings", basicSavingsFee, sb.waiverMinBalance),
-    interest: basicSavings.interest,
-    bonuses: savingsBonuses(rng),
-  });
-  const savingsPremium = product("savings", "premium", premiumName, {
-    minOpeningDeposit: rng.money(...sp.minOpeningDeposit),
-    monthlyFee: monthlyFee(rng, "savings", basicSavingsFee + rng.money(...sp.feeAboveBasic), sp.waiverMinBalance),
-    interest: premiumSavings.interest,
-    bonuses: savingsBonuses(rng),
-  });
-
-  return {
-    checking_basic: checkingBasic,
-    checking_premium: checkingPremium,
-    savings_basic: savingsBasic,
-    savings_premium: savingsPremium,
-  };
+  const names = SPEC.tiers.map((_, i) => rng.pick(scheme[i]!));
+  const products: Partial<BankConfig["products"]> = {};
+  for (const family of ["checking", "savings"] as const) {
+    let below: Product | null = null;
+    SPEC.tiers.forEach((_, position) => {
+      const p = sampleProduct(rng, family, position, below, names[position]!);
+      products[p.id] = p;
+      below = p;
+    });
+  }
+  return products as BankConfig["products"];
 }
 
 function samplePolicies(rng: Rng): Policies {

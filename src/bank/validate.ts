@@ -1,20 +1,9 @@
 // Coherence checks. The sampler should never violate these; the validator
 // guards against sampler bugs and against hand-edited configs.
 
+import { highestApy, lowestApy } from "./rules.ts";
 import { PRODUCT_IDS } from "./schema.ts";
-import type { BankConfig, Family, Interest, Product } from "./schema.ts";
-
-function lowestApy(interest: Interest): number {
-  if (interest.structure === "none") return 0;
-  if (interest.structure === "flat") return interest.apy;
-  return interest.tiers[0]!.apy;
-}
-
-function highestApy(interest: Interest): number {
-  if (interest.structure === "none") return 0;
-  if (interest.structure === "flat") return interest.apy;
-  return interest.tiers.at(-1)!.apy;
-}
+import type { BankConfig, Family, Product } from "./schema.ts";
 
 function minBalanceWaiver(p: Product): number | null {
   const c = p.monthlyFee.waiver.conditions.find((x) => x.kind === "min_balance");
