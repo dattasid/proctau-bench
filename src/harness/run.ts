@@ -31,6 +31,7 @@ export interface ScriptTurn {
   agent: string;
   acts: Act[]; // the agent's acts (the vote across samples when there are several)
   conflicts: string[];
+  samples?: Act[][]; // each sample's acts, when the extractor ran more than once
   trigger: Trigger | null;
   customer: CustomerAct[];
   flags: string[];
@@ -119,13 +120,15 @@ export async function runTask(bank: Bank, task: Task, opts: RunOptions): Promise
     const agentText = said.at(-1)!.content;
     let acts: Act[] = [{ act: "greet", args: {}, quote: GREETING }];
     let conflicts: string[] = [];
+    let samples: Act[][] | undefined;
     if (agentText !== GREETING) {
       const r = await extractRepeated(opts.apiKey, opts.userModel, { ...names, history: said.slice(-7, -1) }, agentText, opts.extractSamples ?? 1);
       acts = r.consensus;
       conflicts = r.conflicts;
+      if (r.samples.length > 1) samples = r.samples.map((x) => x.acts);
     }
     const s = step(task.script, engineState, acts);
-    const entry: ScriptTurn = { agent: agentText, acts, conflicts, trigger: s.trigger, customer: s.acts, flags: s.flags };
+    const entry: ScriptTurn = { agent: agentText, acts, conflicts, ...(samples ? { samples } : {}), trigger: s.trigger, customer: s.acts, flags: s.flags };
     scriptLog.push(entry);
     if (s.acts.length === 0) return { said: "", end: s.end === "off_script" ? "off_script" : "agent_ended" };
     const r = await rephrase(opts.apiKey, opts.userModel, task.script, agentText, s.acts);

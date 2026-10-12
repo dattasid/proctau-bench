@@ -94,6 +94,13 @@ ul.checks .detail { color: var(--muted); font-size: 13px; }
 .doc .path { font-family: var(--mono); font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 4px; margin-bottom: 6px; }
 .doc .content { white-space: pre-wrap; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; }
 details.fold > summary { cursor: pointer; color: var(--accent); margin: 8px 0; }
+.script { max-width: 80%; margin: 2px 0 12px; border-left: 3px solid var(--line); padding: 4px 0 4px 10px; font-size: 12.5px; }
+.script summary { cursor: pointer; color: var(--muted); }
+.script .acts { font-family: var(--mono); font-size: 12px; margin: 4px 0; }
+.script .acts div { padding: 1px 0; word-break: break-word; }
+.script .row { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; margin: 3px 0; }
+.script .sample { color: var(--muted); }
+.badge.warn { background: var(--warn-bg); color: var(--warn); }
 .note { color: var(--muted); }
 dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; }
 dl.kv dt { color: var(--muted); }
@@ -181,7 +188,7 @@ function renderTree() {
     return `<details class="batch" ${open ? "open" : ""}>
       <summary><span class="path">${esc(b.path)}</span><div class="sub">${passed}/${b.runs.length} passed${esc(model)}${m.finishedAt ? "" : m.startedAt ? " · unfinished" : ""}</div></summary>
       ${runs.map((r) => `<button class="run ${sel.batch === b.path && sel.file === r.file ? "sel" : ""}" data-batch="${esc(b.path)}" data-file="${esc(r.file)}">
-        <span class="badge ${r.pass ? "good" : "bad"}">${r.pass ? "PASS" : "FAIL"}</span>
+        <span class="badge ${r.endReason === "off_script" ? "warn" : r.pass ? "good" : "bad"}">${r.endReason === "off_script" ? "OFF" : r.pass ? "PASS" : "FAIL"}</span>
         <span><div class="name">${esc(r.taskId)}</div><div class="sub">${esc(r.endReason)} · ${r.calls} calls · ${r.turns} messages${r.violations ? ` · ${r.violations} violations` : ""}${r.dbMatch ? "" : " · end state differs"}</div></span>
       </button>`).join("")}
     </details>`;
@@ -216,10 +223,15 @@ function renderRun(tab, at) {
   const { task, result, bank } = current.data;
   const e = result.evaluation;
   const chips = [
-    chip(e.pass ? "PASS" : "FAIL", e.pass ? "good" : "bad"),
+    e.endReason === "off_script" ? chip("OFF SCRIPT: not scored", "warn") : chip(e.pass ? "PASS" : "FAIL", e.pass ? "good" : "bad"),
     chip(e.dbMatch ? "end state matches gold" : "end state differs", e.dbMatch ? "good" : "bad"),
     chip(`${e.violations.length} violations`, e.violations.length ? "bad" : ""),
     ...(e.blockedAttempts.length ? [chip(`${e.blockedAttempts.length} blocked`, "warn")] : []),
+    ...((e.missingCalls ?? []).length ? [chip(`never called ${e.missingCalls.join(", ")}`, "bad")] : []),
+    ...(result.script ? [chip("scripted customer")] : []),
+    ...(result.script?.some((s) => s.fellBack) ? [chip(`${result.script.filter((s) => s.fellBack).length} rephraser fallbacks`, "warn")] : []),
+    ...(result.script?.some((s) => s.flags.length) ? [chip("flagged turns", "warn")] : []),
+    ...(task.script?.wrongFirst ? [chip(`slips on ${Object.keys(task.script.wrongFirst).join(", ")} first`)] : []),
     chip(`ended: ${e.endReason}`),
     chip(`bank seed ${task.bankSeed}`),
     ...(bank ? [chip(`today ${bank.config.bank.simulatedDate}`), chip(bank.config.bank.name)] : []),
@@ -253,9 +265,36 @@ function renderPrompts({ result, bank }) {
   return fold("Agent system prompt", agent) + fold("Customer simulator system prompt", user);
 }
 
+// An act as a call, e.g. action_result(action="open_account", status="done").
+const actCall = (a) => `${a.act}(${Object.entries(a.args ?? {}).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(", ")})`;
+const customerCall = (a) => { const { act, ...rest } = a; return actCall({ act, args: rest }); };
+
+// What the scripted customer understood from an agent message and decided to do.
+function renderScriptTurn(s, said) {
+  if (!s) return "";
+  const acts = s.acts.length ? s.acts.map((a) => `<div title="${esc(a.quote ?? "")}">${esc(actCall(a))}</div>`).join("") : `<div class="note">no acts</div>`;
+  const samples = s.samples ? `<details class="fold"><summary>${s.samples.length} extractor samples</summary>${s.samples.map((x, i) =>
+    `<div class="acts sample"><b>sample ${i + 1}</b>${x.map((a) => `<div>${esc(actCall(a))}</div>`).join("")}</div>`).join("")}</details>` : "";
+  const decided = s.customer.length ? s.customer.map((c) => `<div>${esc(customerCall(c))}</div>`).join("") : `<div class="note">ends the conversation</div>`;
+  const draft = s.draft && s.draft !== said ? `<div class="label">Draft${s.fellBack ? " (sent as is: the rewrite lost a value)" : ""}</div><div>${esc(s.draft)}</div>` : "";
+  return `<details class="script" open><summary>Extracted and decided</summary>
+    <div class="acts">${acts}</div>${samples}
+    ${s.conflicts.length ? `<div class="row">${chip("conflicts", "warn")}<span>${esc(s.conflicts.join("; "))}</span></div>` : ""}
+    <div class="row">${chip(`trigger: ${s.trigger ?? "none"}`)}${s.flags.map((f) => chip(f, "warn")).join("")}</div>
+    <div class="acts">${decided}</div>${draft}</details>`;
+}
+
 function renderChat({ result, bank }) {
   let k = 0;
-  return renderPrompts({ result, bank }) + result.turns.map((t) => {
+  let a = 0;
+  const turns = result.turns;
+  return renderPrompts({ result, bank }) + turns.map((t, i) => {
+    if (t.role === "agent" && result.script) {
+      const s = result.script[a++];
+      const next = turns.slice(i + 1).find((x) => x.role !== "tool");
+      const said = next && next.role === "user" ? next.content : null;
+      return `<div class="msg agent"><div class="who">Agent</div><div class="text">${esc(t.content)}</div></div>${renderScriptTurn(s, said)}`;
+    }
     if (t.role === "tool") {
       const i = k++;
       const args = JSON.stringify(t.args);
@@ -300,9 +339,22 @@ document.addEventListener("click", (e) => {
 function renderTask({ task, result }) {
   const e = result.evaluation;
   const list = (items, fmt) => items.length ? `<ul class="checks">${items.map(fmt).join("")}</ul>` : `<p class="note">None.</p>`;
-  return `<h3>Customer instructions (private to the user simulator)</h3><pre>${esc(task.user.instructions)}</pre>
+  const sc = task.script;
+  const script = sc ? `<h3>Customer script</h3>
+    <dl class="kv">
+      <dt>Goal</dt><dd>${esc(JSON.stringify(sc.goal))}</dd>
+      <dt>Knows</dt><dd>${esc(JSON.stringify(sc.knows))}</dd>
+      ${sc.wrongFirst ? `<dt>Wrong first</dt><dd>${esc(JSON.stringify(sc.wrongFirst))}</dd>` : ""}
+      <dt>Own reactions</dt><dd>${esc(JSON.stringify(sc.reactions))}</dd>
+      <dt>Expected ending</dt><dd>${esc(sc.expectedEnding)}</dd>
+    </dl>
+    <div class="label">Truth (what the agent's statements can be checked against)</div>${json(sc.truth)}` : "";
+  const planted = task.planted?.length ? `<h3>Planted mistakes in the starting history</h3>${json(task.planted)}` : "";
+  const forbidden = task.forbiddenCalls?.length ? `<h3>Forbidden calls</h3>${task.forbiddenCalls.map((c) => `<div class="label"><code>${esc(c.tool)}</code></div>${json(c.args)}`).join("")}` : "";
+  const required = task.requiredCalls?.length ? `<h3>Required calls</h3><p>${task.requiredCalls.map((t) => `<code>${esc(t)}</code>`).join(", ")}${(e.missingCalls ?? []).length ? ` · never called: ${esc(e.missingCalls.join(", "))}` : " · all called"}</p>` : "";
+  return `${script}${planted}<h3>Customer instructions (for the LLM customer)</h3><pre>${esc(task.user.instructions)}</pre>
     <h3>Intended rule verdicts</h3>${list(task.intended, (i) => `<li>${chip(i.passed ? "pass" : "fail", i.passed ? "good" : "bad")}<span class="rule">${esc(i.rule)}</span></li>`)}
-    <h3>Gold calls</h3>${task.goldCalls.map((c, i) => `<div class="label">${i + 1}. <code>${esc(c.tool)}</code></div>${json(c.args)}`).join("")}
+    <h3>Gold calls</h3>${task.goldCalls.map((c, i) => `<div class="label">${i + 1}. <code>${esc(c.tool)}</code></div>${json(c.args)}`).join("")}${forbidden}${required}
     <h3>Evaluation</h3>
     <dl class="kv">
       <dt>Pass</dt><dd>${e.pass}</dd>
