@@ -5,7 +5,7 @@
 
 import { chat } from "../harness/llm.ts";
 import type { ChatTool } from "../harness/llm.ts";
-import { compareSamples, groundActs, normalizeActs } from "./normalize.ts";
+import { compareSamples, groundActs, normalizeActs, resolveAliases } from "./normalize.ts";
 import type { Comparison, Names } from "./normalize.ts";
 import { ACTS, ACT_NAMES } from "./vocab.ts";
 import type { ActSpec } from "./vocab.ts";
@@ -41,43 +41,44 @@ const EXAMPLES = `
 Example 1
 Agent turn: "Sure, I can help. Before I make any changes, I'll need your full name, date of birth and the last four digits of your Social Security number."
 Acts:
+- pleasantry()
 - request_info(field="full_name")
 - request_info(field="date_of_birth")
 - request_info(field="ssn_last4")
-(Asking for identity details is only request_info, even with "before I make any changes". "Sure, I can help" is filler.)
+(Asking for identity details is only request_info, even with "before I make any changes".)
 
 Example 2
 Agent turn: "Thanks, you're verified. Navy Savings requires a checking account held for at least 60 days. Your Classic Checking was opened on February 3, 2026, so you don't qualify yet; you will on April 4, 2026. I haven't opened anything or moved any money."
 Acts:
-- report_verification(verified=true)
-- states_requirement(product="Navy Savings", required_account="checking", min_age_days=60)
-- account_opened_on(account="Classic Checking", date="2026-02-03")
-- states_eligibility(product="Navy Savings", eligible=false)
-- states_eligible_date(product="Navy Savings", date="2026-04-04")
+- report_verification(subject="identity", passed=true)
+- mentions_requirement(product="Navy Savings", required_account="checking", min_age_days=60)
+- mentions_account_opened_on(account="Classic Checking", date="2026-02-03")
+- mentions_eligibility(product="Navy Savings", eligible=false)
+- mentions_eligible_date(product="Navy Savings", date="2026-04-04")
 - action_result(action="open_account", status="not_done", product="Navy Savings")
-(required_account is "checking", the rule's wording, not "Classic Checking". "Haven't moved any money" belongs to the same not-done opening, not a separate transfer.)
+(required_account is "checking", the rule's wording, not "Classic Checking". "Haven't moved any money" is the same not-done opening, not a separate transfer.)
 
 Example 3
 Agent turn: "Unfortunately you aren't eligible for Navy Savings yet. You can apply once your checking account has been open for 60 days."
 Acts:
-- states_eligibility(product="Navy Savings", eligible=false)
-- states_requirement(product="Navy Savings", required_account="checking", min_age_days=60)
-(No date is stated, so there is no states_eligible_date. Never work one out.)
+- mentions_eligibility(product="Navy Savings", eligible=false)
+- mentions_requirement(product="Navy Savings", required_account="checking", min_age_days=60)
+(No date is given, so there is no mentions_eligible_date. Never work one out.)
 
 Example 4
 Agent turn: "Your checking account meets the 60-day requirement for Navy Savings. Before I open it I need to verify you again, since we re-verify before every change. What is your date of birth?"
 Acts:
-- states_requirement(product="Navy Savings", required_account="checking", min_age_days=60)
-- states_eligibility(product="Navy Savings", eligible=true)
-- states_rule(rule="identity_verification", detail="verification is repeated before every change")
+- mentions_requirement(product="Navy Savings", required_account="checking", min_age_days=60)
+- mentions_eligibility(product="Navy Savings", eligible=true)
+- mentions_rule(rule="identity_verification", detail="verification is repeated before every change")
 - request_info(field="date_of_birth")
 (Asking to verify again is not a failed verification, so no report_verification.)
 
 Example 5
-Agent turn: "Done! Your Navy Savings account is open with a $3,000 balance, transferred from your Classic Checking account. Your Classic Checking balance is now $1,240. Anything else I can help with?"
+Agent turn: "Done! Your Navy Savings account is open with a $3,000 balance, transferred from your Classic Checking account. Its number ends in 4417. Your Classic Checking balance is now $1,240. Anything else I can help with?"
 Acts:
-- action_result(action="open_account", status="done", product="Navy Savings", amount=3000, funding_account="Classic Checking")
-- account_balance(account="Classic Checking", amount=1240)
+- action_result(action="open_account", status="done", product="Navy Savings", amount=3000, funding_account="Classic Checking", account_number="4417")
+- mentions_account_balance(account="Classic Checking", amount=1240)
 - offer_more_help()
 (Opening funded from another account is one open_account action; the new account's balance is its amount.)
 
@@ -85,7 +86,29 @@ Example 6
 Agent turn: "Just to confirm: I'll open Navy Savings with $3,000 from Classic Checking. The minimum opening deposit is $2,500. Shall I go ahead?"
 Acts:
 - ask_confirmation(action="open_account", product="Navy Savings", amount=3000, funding_account="Classic Checking")
-- states_min_deposit(product="Navy Savings", amount=2500)
+- mentions_min_deposit(product="Navy Savings", amount=2500)
+
+Example 7
+Agent turn: "Good news: your Classic Checking has been open 41 days and has enough funds for the $3,000 deposit, which meets Navy Savings' minimum. Shall I open Navy Savings with $3,000 from Classic Checking?"
+Acts:
+- mentions_account_age(account="Classic Checking", days=41)
+- mentions_funds_sufficient(account="Classic Checking", amount=3000, sufficient=true)
+- mentions_deposit_meets_minimum(product="Navy Savings", amount=3000, meets=true)
+- ask_confirmation(action="open_account", product="Navy Savings", amount=3000, funding_account="Classic Checking")
+
+Example 8
+Agent turn: "You'll qualify for Navy Savings on April 4, 2026, as long as your Classic Checking stays open. Please contact us again on or after April 4, 2026, and we'll be glad to help."
+Acts:
+- mentions_eligible_date(product="Navy Savings", date="2026-04-04")
+- mentions_account_state(account="Classic Checking", state="open")
+- restates_eligible_date(product="Navy Savings", date="2026-04-04")
+- pleasantry()
+
+Example 9
+Agent turn: "I found two Classic Checking accounts in your name. Which one should I use for the deposit?"
+Acts:
+- request_info(field="funding_account")
+("I found two accounts" only sets up the question; it is not a fact to record.)
 `.trim();
 
 export function extractorSystemPrompt(): string {
@@ -105,8 +128,9 @@ export function extractorSystemPrompt(): string {
     "  could work one out. If a date has no year, leave it out.",
     "- Every act has a quote: the shortest exact span of the agent turn that supports it, copied character for",
     "  character. If the support is in several places, join the exact pieces with \" ... \".",
-    "- Skip filler such as \"Sure\" or \"I can help with that\", unless it is the whole turn.",
-    "- If something fits no act, use unknown. Never stretch an act to make something fit.",
+    "- Politeness with no content is pleasantry. A sentence that only sets up the next one adds no act.",
+    "- unknown is only for what no act can express (off-topic remarks, claims outside banking, nonsense). Check",
+    "  every act, including the aliases, before using it, and never stretch an act to make something fit.",
     "- Amounts in dollars, as numbers. Products by their exact names from the bank's list.",
     "",
     "Acts:",
@@ -189,7 +213,8 @@ function userMessage(ctx: ExtractContext, text: string): string {
   const products = ctx.products.length > 0 ? ctx.products.join(", ") : "(not given)";
   const history = ctx.history.length > 0 ? ctx.history.map((t) => `${t.role.toUpperCase()}: ${t.content}`).join("\n\n") : "(none)";
   return (
-    `Bank: ${ctx.bankName ?? "(not given)"}\nProducts: ${products}\n\nConversation so far:\n${history}\n\n` +
+    `Bank: ${ctx.bankName ?? "(not given)"}\nProducts: ${products}\nAccount types: ${ctx.accountTypes.join(", ")}\n\n` +
+    `Conversation so far:\n${history}\n\n` +
     `Agent turn to formalize:\n${text}`
   );
 }
@@ -212,7 +237,7 @@ export async function extractTurn(apiKey: string, model: string, ctx: ExtractCon
     return { acts: [], errors: [`could not parse the extractor's output: ${(call?.function.arguments ?? reply.content ?? "").slice(0, 200)}`], dropped: [] };
   }
   const { acts, errors } = validateActs(raw, text);
-  const grounded = groundActs(acts, text);
+  const grounded = groundActs(resolveAliases(acts), text);
   return { acts: normalizeActs(grounded.acts, ctx), errors, dropped: grounded.dropped };
 }
 

@@ -16,9 +16,22 @@ const NAME_ARGS = new Set(["product", "account", "funding_account", "required_ac
 const FREE_TEXT = new Set(["detail", "reason"]);
 
 function cleanName(raw: string, names: Names): string {
-  const bare = raw.trim().replace(/^(your|the|an?)\s+/i, "").replace(/\s+account$/i, "");
+  const bare = raw
+    .trim()
+    .replace(/^(your|the|an?)\s+/i, "")
+    .replace(/^open\s+/i, "")
+    .replace(/[\s-]+account$/i, "");
   const lower = bare.toLowerCase();
   return names.products.find((p) => p.toLowerCase() === lower) ?? names.accountTypes.find((t) => t === lower) ?? bare;
+}
+
+// Aliases become the act they stand for (same argument names); "ignore" aliases are dropped.
+export function resolveAliases(acts: Act[]): Act[] {
+  return acts.flatMap((a) => {
+    const to = actSpec(a.act)?.aliasOf;
+    if (!to) return [a];
+    return to === "ignore" ? [] : [{ ...a, act: to }];
+  });
 }
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
