@@ -75,6 +75,7 @@ function sentence(a: CustomerAct): string {
       if (a.field === "funding_account" || a.field === "account") return `It's my ${a.value} account.`;
       if (a.field === "product") return `I'd like to open ${a.value}.`;
       if (a.field === "date") return `It was charged on ${spoken(a.field, a.value)}.`;
+      if (a.field === "ssn_last4") return `The last four digits of my Social Security number are ${a.value}.`;
       return `My ${FIELD_NAMES[a.field]} is ${spoken(a.field, a.value)}.`;
     case "dont_have":
       return `I'm sorry, I don't have my ${FIELD_NAMES[a.field]} with me.`;
