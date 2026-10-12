@@ -55,6 +55,8 @@ export function validateBank(config: BankConfig): string[] {
       if (r.minAgeDays < 0) err(`${id}: negative requirement age`);
     }
   }
+  const names = Object.values(config.products).map((p) => p.displayName);
+  for (const name of new Set(names)) if (names.indexOf(name) !== names.lastIndexOf(name)) err(`two products are named ${name}`);
   if (errors.length > 0) return errors;
 
   // Tier order: each tier against the one below it, only for banks whose tiers step up.

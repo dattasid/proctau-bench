@@ -5,7 +5,7 @@
 import { annualInterestCents } from "../bank/rules.ts";
 import { days, money, moneyCents, percent, times } from "../util/format.ts";
 import type { Rng } from "../util/rng.ts";
-import { accountTypeName, allProducts, tierRank } from "../bank/products.ts";
+import { accountTypeName, allProducts, productsOf, tierRank } from "../bank/products.ts";
 import type { BankConfig, InterestBonus, Product, Requirement, WaiverCondition } from "../bank/schema.ts";
 
 export interface Doc {
@@ -113,12 +113,17 @@ function eligibilityText(p: Product): string {
 function productSheet(config: BankConfig, p: Product, say: Say): Doc {
   const kind = accountTypeName(p.accountType);
   const rank = tierRank(config, p.tier);
-  // Only the top tier of an ordered bank is described as being for higher balances.
+  const ladder = productsOf(config, p.accountType);
+  const below = ladder[ladder.indexOf(p) - 1];
+  // Only ordered banks compare tiers: a middle tier is a step up from the one below, and the top
+  // tier is for higher balances.
   const intro =
     rank === 0
       ? say(`${p.displayName} is our everyday ${kind} account.`, `${p.displayName} is ${config.bank.name}'s standard ${kind} account.`)
       : rank < 1
-        ? `${p.displayName} is one of ${config.bank.name}'s ${kind} accounts.`
+        ? config.unorderedTiers
+          ? `${p.displayName} is one of ${config.bank.name}'s ${kind} accounts.`
+          : say(`${p.displayName} is a step up from ${below!.displayName}.`, `${p.displayName} sits above ${below!.displayName} in our ${kind} range.`)
         : config.unorderedTiers
           ? `${p.displayName} is ${config.bank.name}'s premium ${kind} account.` // no claims about how it compares
           : say(

@@ -104,13 +104,16 @@ export const SPEC = {
   bank: {
     prefixes: ["Harbor", "Summit", "Cedar", "Lakeside", "Ironwood", "Meridian", "Northgate", "Willow"],
     suffixes: ["Bank", "Savings Bank", "Trust", "Community Bank"],
-    // One scheme per bank, one list per tier from lowest to highest; each tier's products
-    // take a name from its list. Every scheme needs at least as many lists as there are tiers.
-    nameSchemes: [
-      [["Bronze", "Silver"], ["Gold", "Platinum"]],
-      [["Blue", "Green"], ["Navy", "Emerald"]],
-      [["Essential", "Everyday"], ["Plus", "Preferred"]],
-    ] as readonly (readonly (readonly string[])[])[],
+    // Product name ladders, lowest to highest. Each account type picks its own ladder and takes
+    // one name per tier, in order: a run of consecutive names starting anywhere, or at the first
+    // name with `fromStart`. Five names each, so a bank can have up to five tiers.
+    nameLadders: [
+      { names: ["Bronze", "Silver", "Gold", "Platinum", "Diamond"], fromStart: false },
+      { names: ["Essential", "Plus", "Preferred", "Premier", "Private"], fromStart: false },
+      { names: ["Blue", "Green", "Navy", "Emerald", "Onyx"], fromStart: false },
+      { names: ["Starter", "Classic", "Select", "Elite", "Signature"], fromStart: false },
+      { names: ["Level 1", "Level 2", "Level 3", "Level 4", "Level 5"], fromStart: true },
+    ] as readonly { names: readonly string[]; fromStart: boolean }[],
     simulatedYear: 2026,
   },
 

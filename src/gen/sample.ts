@@ -138,12 +138,19 @@ function sampleProduct(
   };
 }
 
+// One name per tier, lowest first, from a random ladder.
+function tierNames(rng: Rng, spec: Spec): string[] {
+  const n = spec.tiers.length;
+  const ladder = rng.pick(spec.bank.nameLadders);
+  if (ladder.names.length < n) throw new Error(`a name ladder has ${ladder.names.length} names for ${n} tiers`);
+  const offset = ladder.fromStart ? 0 : rng.int(0, ladder.names.length - n);
+  return ladder.names.slice(offset, offset + n);
+}
+
 function sampleProducts(rng: Rng, spec: Spec, unordered: boolean): BankConfig["products"] {
-  const scheme = rng.pick(spec.bank.nameSchemes);
-  if (scheme.length < spec.tiers.length) throw new Error(`a name scheme has ${scheme.length} lists for ${spec.tiers.length} tiers`);
-  const names = spec.tiers.map((_, i) => rng.pick(scheme[i]!));
   const products: BankConfig["products"] = {};
   for (const accountType of Object.keys(spec.accountTypes)) {
+    const names = tierNames(rng, spec);
     let below: Product | null = null;
     spec.tiers.forEach((_, position) => {
       const p = sampleProduct(rng, spec, accountType, position, below, names[position]!, unordered);

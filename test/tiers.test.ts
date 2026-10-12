@@ -13,17 +13,8 @@ import { buildTasks } from "../src/gen/tasks.ts";
 import { evaluate } from "../src/harness/evaluate.ts";
 import { hashDatabase } from "../src/util/hash.ts";
 
-const THREE_TIERS: Spec = {
-  ...SPEC,
-  tiers: ["basic", "plus", "premium"],
-  bank: {
-    ...SPEC.bank,
-    nameSchemes: [
-      [["Bronze"], ["Silver"], ["Gold"]],
-      [["Blue"], ["Teal"], ["Navy"]],
-    ],
-  },
-};
+const THREE_TIERS: Spec = { ...SPEC, tiers: ["basic", "plus", "premium"] };
+const FIVE_TIERS: Spec = { ...SPEC, tiers: ["t1", "t2", "t3", "t4", "t5"] };
 
 describe("three tiers", () => {
   const banks = Array.from({ length: 150 }, (_, i) => generateBank(i + 1, THREE_TIERS));
@@ -54,6 +45,12 @@ describe("three tiers", () => {
     for (const id of Object.keys(config.products)) assert.ok(held.has(id), `no background account in ${id}`);
   });
 
+  it("describes a middle tier as a step up from the one below, on ordered banks", () => {
+    const { config, docs } = banks.find(({ bank }) => !bank!.config.unorderedTiers)!.bank!;
+    const [low, mid] = productsOf(config, "savings");
+    assert.match(docs.find((d) => d.path === `products/${mid!.id}.md`)!.content, new RegExp(`above ${low!.displayName}|up from ${low!.displayName}`));
+  });
+
   it("builds tasks whose gold calls pass and reach the gold end state", () => {
     let built = 0;
     for (const { bank } of banks) {
@@ -66,5 +63,23 @@ describe("three tiers", () => {
       }
     }
     assert.ok(built >= 150, `${built} tasks`);
+  });
+});
+
+describe("five tiers", () => {
+  const banks = Array.from({ length: 100 }, (_, i) => generateBank(i + 1, FIVE_TIERS));
+
+  it("every bank validates, with names in ladder order and numbered ladders from the start", () => {
+    for (const { bank, errors } of banks) assert.ok(bank, errors.join("; "));
+    for (const { bank } of banks) {
+      for (const t of bank!.config.accountTypes) {
+        const names = productsOf(bank!.config, t).map((p) => p.displayName.split(" ").slice(0, -1).join(" "));
+        assert.ok(SPEC.bank.nameLadders.some((l) => l.names.join() === names.join()), `seed ${bank!.seed}: ${names}`);
+      }
+    }
+  });
+
+  it("refuses more tiers than a ladder has names", () => {
+    assert.throws(() => generateBank(1, { ...SPEC, tiers: ["a", "b", "c", "d", "e", "f"] }), /name ladder/);
   });
 });
