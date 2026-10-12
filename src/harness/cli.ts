@@ -2,6 +2,8 @@
 //          [--agent-model M] [--user-model M] [--server URL] [--out DIR]
 //          [--customer llm|scripted] [--extract-samples N]
 // --tasks-per-bank: draw more task variants until each bank has T tasks (default: one per template).
+// --template: one or more template ids, comma-separated; * matches anything (e.g. fee_*,open_account_eligible).
+//   npm run harness -- --list-templates prints them.
 // Generates banks and tasks, runs each task as a conversation against the executor
 // (an in-process server unless --server is given) and writes one JSON file per run.
 // A batch directory also holds meta.json and, under banks/, each bank's config, documents
@@ -13,7 +15,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { generateBank } from "../gen/generate.ts";
 import { createEnvServer } from "../env/server.ts";
-import { buildTasks } from "../gen/tasks.ts";
+import { TEMPLATES, buildTasks } from "../gen/tasks.ts";
 import { DEFAULT_MODEL, readApiKey } from "./llm.ts";
 import { agentSystemPrompt } from "./prompts.ts";
 import { runTask } from "./run.ts";
@@ -23,6 +25,7 @@ const { values } = parseArgs({
     seed: { type: "string", default: "1" },
     count: { type: "string", default: "1" },
     template: { type: "string" },
+    "list-templates": { type: "boolean", default: false },
     "tasks-per-bank": { type: "string" },
     customer: { type: "string", default: "llm" },
     "extract-samples": { type: "string", default: "1" },
@@ -32,6 +35,18 @@ const { values } = parseArgs({
     out: { type: "string", default: "out/runs" },
   },
 });
+
+if (values["list-templates"]) {
+  console.log(TEMPLATES.map((t) => t.id).join("\n"));
+  process.exit(0);
+}
+// Each pattern matches a whole template id; * stands for any run of characters.
+const pattern = (p: string) => new RegExp(`^${p.trim().split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
+const templateFilter = values.template ? values.template.split(",").map(pattern) : null;
+if (templateFilter && !TEMPLATES.some((t) => templateFilter.some((re) => re.test(t.id)))) {
+  console.error(`no template matches ${values.template}; known: ${TEMPLATES.map((t) => t.id).join(", ")}`);
+  process.exit(1);
+}
 
 const apiKey = readApiKey();
 let baseUrl = values.server;
@@ -66,7 +81,7 @@ try {
       continue;
     }
     const wanted = values["tasks-per-bank"] ? Number(values["tasks-per-bank"]) : 0;
-    const keep = (t: { template: string }) => !values.template || t.template === values.template;
+    const keep = (t: { template: string }) => !templateFilter || templateFilter.some((re) => re.test(t.template));
     let tasks = buildTasks(bank).filter(keep);
     for (let variant = 1; tasks.length > 0 && tasks.length < wanted; variant++) tasks.push(...buildTasks(bank, variant).filter(keep));
     if (wanted > 0) tasks = tasks.slice(0, wanted);
