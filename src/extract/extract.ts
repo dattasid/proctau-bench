@@ -1,10 +1,12 @@
 // Formalizes one agent turn into dialogue acts from the vocabulary. The extractor never sees the
 // task: only the bank's product names, the conversation so far (to resolve references) and the
 // turn itself. Every act carries a verbatim quote, checked against the turn, so an act the agent
-// never said is caught. Optionally runs several times and reports whether the samples agree.
+// never said is caught. Optionally runs several times and compares the samples (normalize.ts).
 
 import { chat } from "../harness/llm.ts";
 import type { ChatTool } from "../harness/llm.ts";
+import { compareSamples, groundActs, normalizeActs } from "./normalize.ts";
+import type { Comparison, Names } from "./normalize.ts";
 import { ACTS, ACT_NAMES } from "./vocab.ts";
 import type { ActSpec } from "./vocab.ts";
 
@@ -16,22 +18,75 @@ export interface Act {
 
 export interface Extraction {
   acts: Act[];
-  errors: string[]; // validation problems; any error makes the extraction unusable
+  errors: string[]; // validation problems
+  dropped: string[]; // number and date arguments removed because the agent never said them
 }
 
-export interface ExtractContext {
+export interface ExtractContext extends Names {
   bankName?: string;
-  products: string[]; // display names
   history: { role: "agent" | "user"; content: string }[]; // turns before this one
 }
 
 function describeAct(a: ActSpec): string {
   const args = Object.entries(a.args).map(([k, s]) => {
-    const values = s.enum ? ` one of ${s.enum.join(", ")}.` : "";
+    const values = s.enum ? ` One of: ${s.enum.join(", ")}.` : "";
     return `    - ${k} (${s.type}${s.optional ? ", optional" : ""}): ${s.description}${values}`;
   });
   return `- ${a.name}: ${a.description}${args.length > 0 ? `\n${args.join("\n")}` : ""}`;
 }
+
+// Worked examples. Products, names and dates are made up and differ from every saved run, so
+// they teach the decisions without giving away answers.
+const EXAMPLES = `
+Example 1
+Agent turn: "Sure, I can help. Before I make any changes, I'll need your full name, date of birth and the last four digits of your Social Security number."
+Acts:
+- request_info(field="full_name")
+- request_info(field="date_of_birth")
+- request_info(field="ssn_last4")
+(Asking for identity details is only request_info, even with "before I make any changes". "Sure, I can help" is filler.)
+
+Example 2
+Agent turn: "Thanks, you're verified. Navy Savings requires a checking account held for at least 60 days. Your Classic Checking was opened on February 3, 2026, so you don't qualify yet; you will on April 4, 2026. I haven't opened anything or moved any money."
+Acts:
+- report_verification(verified=true)
+- states_requirement(product="Navy Savings", required_account="checking", min_age_days=60)
+- account_opened_on(account="Classic Checking", date="2026-02-03")
+- states_eligibility(product="Navy Savings", eligible=false)
+- states_eligible_date(product="Navy Savings", date="2026-04-04")
+- action_result(action="open_account", status="not_done", product="Navy Savings")
+(required_account is "checking", the rule's wording, not "Classic Checking". "Haven't moved any money" belongs to the same not-done opening, not a separate transfer.)
+
+Example 3
+Agent turn: "Unfortunately you aren't eligible for Navy Savings yet. You can apply once your checking account has been open for 60 days."
+Acts:
+- states_eligibility(product="Navy Savings", eligible=false)
+- states_requirement(product="Navy Savings", required_account="checking", min_age_days=60)
+(No date is stated, so there is no states_eligible_date. Never work one out.)
+
+Example 4
+Agent turn: "Your checking account meets the 60-day requirement for Navy Savings. Before I open it I need to verify you again, since we re-verify before every change. What is your date of birth?"
+Acts:
+- states_requirement(product="Navy Savings", required_account="checking", min_age_days=60)
+- states_eligibility(product="Navy Savings", eligible=true)
+- states_rule(rule="identity_verification", detail="verification is repeated before every change")
+- request_info(field="date_of_birth")
+(Asking to verify again is not a failed verification, so no report_verification.)
+
+Example 5
+Agent turn: "Done! Your Navy Savings account is open with a $3,000 balance, transferred from your Classic Checking account. Your Classic Checking balance is now $1,240. Anything else I can help with?"
+Acts:
+- action_result(action="open_account", status="done", product="Navy Savings", amount=3000, funding_account="Classic Checking")
+- account_balance(account="Classic Checking", amount=1240)
+- offer_more_help()
+(Opening funded from another account is one open_account action; the new account's balance is its amount.)
+
+Example 6
+Agent turn: "Just to confirm: I'll open Navy Savings with $3,000 from Classic Checking. The minimum opening deposit is $2,500. Shall I go ahead?"
+Acts:
+- ask_confirmation(action="open_account", product="Navy Savings", amount=3000, funding_account="Classic Checking")
+- states_min_deposit(product="Navy Savings", amount=2500)
+`.trim();
 
 export function extractorSystemPrompt(): string {
   return [
@@ -39,27 +94,27 @@ export function extractorSystemPrompt(): string {
     "and one agent turn. Record every act in that turn by calling record_acts once.",
     "",
     "Rules:",
-    "- Formalize only the agent turn given. Earlier turns are only for resolving references like \"that account\".",
-    "- One act per distinct thing the agent says. One sentence can give several acts; several sentences can form one act.",
-    "- Every act has a quote: the shortest exact span of the agent turn that supports it, copied character for character.",
-    "  If the support is in several places, join the exact pieces with \" ... \".",
-    "- Record what the agent said, not what is true or what it meant to say. Fill every argument the agent stated,",
-    "  and only those; never add facts the agent did not state. Arguments come only from the agent turn itself, never",
-    "  from earlier turns: an amount only the customer mentioned is not an argument.",
-    "- Opening an account funded from another account is one open_account action, with the funding account and the",
-    "  deposit as its arguments. transfer_funds is only for a transfer between existing accounts on its own.",
-    "- Facts about an account the agent has just opened belong in that report_action, not in inform_account.",
-    "- At most one inform_account per account per turn, combining every fact stated about it.",
-    "- report_verification is only for the result of a verification attempt. Asking for identity details, even with a",
-    "  lead-in like \"before I access your accounts\", is only request_info. policy_claim(rule=identity_verification) is",
-    "  for stating a verification rule beyond the request itself, e.g. that verification must be repeated before a change.",
+    "- Formalize only the agent turn given. Earlier turns are only for resolving references like \"that account\" or",
+    "  which product \"it\" is.",
+    "- Each act states one thing. One sentence can give several acts; never put the same fact in two acts.",
+    "- Record what the agent said, not what is true. Fill every argument the agent stated and only those. Arguments",
+    "  come only from the agent turn itself, never from earlier turns: an amount only the customer mentioned is not",
+    "  an argument.",
+    "- Never calculate. Copy dates and numbers as the agent gives them, changing only their format: \"April 4, 2026\"",
+    "  becomes 2026-04-04 and \"60-day\" becomes 60. If the agent gives no date, there is no date argument, even if you",
+    "  could work one out. If a date has no year, leave it out.",
+    "- Every act has a quote: the shortest exact span of the agent turn that supports it, copied character for",
+    "  character. If the support is in several places, join the exact pieces with \" ... \".",
     "- Skip filler such as \"Sure\" or \"I can help with that\", unless it is the whole turn.",
     "- If something fits no act, use unknown. Never stretch an act to make something fit.",
-    "- Dates as YYYY-MM-DD. Amounts in dollars, as numbers. When the agent clearly means one of the bank's products,",
-    "  use the product's exact name.",
+    "- Amounts in dollars, as numbers. Products by their exact names from the bank's list.",
     "",
     "Acts:",
     ...ACTS.map(describeAct),
+    "",
+    "Examples (made up; arguments shown inline, quotes left out):",
+    "",
+    EXAMPLES,
   ].join("\n");
 }
 
@@ -95,7 +150,7 @@ const squash = (s: string) => s.replace(/\s+/g, " ").trim();
 export function validateActs(raw: unknown, text: string): Extraction {
   const errors: string[] = [];
   const list = (raw as { acts?: unknown })?.acts;
-  if (!Array.isArray(list)) return { acts: [], errors: ["no acts array"] };
+  if (!Array.isArray(list)) return { acts: [], errors: ["no acts array"], dropped: [] };
   const acts: Act[] = [];
   const turn = squash(text);
   for (const [i, item] of list.entries()) {
@@ -121,32 +176,13 @@ export function validateActs(raw: unknown, text: string): Extraction {
     const clean = Object.fromEntries(Object.entries(given).filter(([, v]) => v !== null && v !== undefined));
     acts.push({ act: spec.name, args: clean, quote: String(quote) });
   }
-  return { acts, errors };
+  return { acts, errors, dropped: [] };
 }
 
-// An act as a function call, e.g. report_action(action="open_account", status="done").
+// An act as a function call, e.g. action_result(action="open_account", status="done").
 export function renderAct(a: Act): string {
   const args = Object.entries(a.args).map(([k, v]) => `${k}=${JSON.stringify(v)}`);
   return `${a.act}(${args.join(", ")})`;
-}
-
-// Free-text arguments vary in wording between samples, so only their presence is compared.
-const FREE_TEXT = new Set(["detail", "other", "reason"]);
-
-// A canonical form of an act for comparing samples: quote dropped, arguments sorted, strings lowercased.
-export function canonicalAct(a: Act): string {
-  const args = Object.keys(a.args)
-    .sort()
-    .map((k) => {
-      const v = a.args[k];
-      if (FREE_TEXT.has(k)) return `${k}=*`;
-      return `${k}=${typeof v === "string" ? v.toLowerCase().trim() : JSON.stringify(v)}`;
-    });
-  return `${a.act}(${args.join(",")})`;
-}
-
-export function canonical(acts: Act[]): string {
-  return acts.map(canonicalAct).sort().join(" ");
 }
 
 function userMessage(ctx: ExtractContext, text: string): string {
@@ -173,39 +209,19 @@ export async function extractTurn(apiKey: string, model: string, ctx: ExtractCon
   try {
     raw = JSON.parse(call ? call.function.arguments : (reply.content ?? ""));
   } catch {
-    return { acts: [], errors: [`could not parse the extractor's output: ${(call?.function.arguments ?? reply.content ?? "").slice(0, 200)}`] };
+    return { acts: [], errors: [`could not parse the extractor's output: ${(call?.function.arguments ?? reply.content ?? "").slice(0, 200)}`], dropped: [] };
   }
-  return validateActs(raw, text);
+  const { acts, errors } = validateActs(raw, text);
+  const grounded = groundActs(acts, text);
+  return { acts: normalizeActs(grounded.acts, ctx), errors, dropped: grounded.dropped };
 }
 
-export interface TurnResult {
+export interface TurnResult extends Comparison {
   samples: Extraction[];
-  agreed: boolean; // every sample valid and canonically identical
-  consensus: Act[]; // acts found by more than half the samples, in first-seen order
-  disputed: Act[]; // acts found by some samples but not by more than half
 }
 
-// Per-act majority vote: an act counts if more than half the samples contain it.
-function vote(samples: Extraction[]): { consensus: Act[]; disputed: Act[] } {
-  const seen = new Map<string, { act: Act; votes: number }>();
-  for (const s of samples) {
-    for (const key of new Set(s.acts.map(canonicalAct))) {
-      const entry = seen.get(key) ?? { act: s.acts.find((a) => canonicalAct(a) === key)!, votes: 0 };
-      entry.votes++;
-      seen.set(key, entry);
-    }
-  }
-  const all = [...seen.values()];
-  return {
-    consensus: all.filter((e) => e.votes * 2 > samples.length).map((e) => e.act),
-    disputed: all.filter((e) => e.votes * 2 <= samples.length).map((e) => e.act),
-  };
-}
-
-// Runs the extractor `times` times on the same turn, in parallel.
+// Runs the extractor `times` times on the same turn, in parallel, and compares the samples.
 export async function extractRepeated(apiKey: string, model: string, ctx: ExtractContext, text: string, times: number): Promise<TurnResult> {
   const samples = await Promise.all(Array.from({ length: times }, () => extractTurn(apiKey, model, ctx, text)));
-  const forms = samples.map((s) => canonical(s.acts));
-  const agreed = samples.every((s) => s.errors.length === 0) && forms.every((f) => f === forms[0]);
-  return { samples, agreed, ...vote(samples) };
+  return { samples, ...compareSamples(samples.map((s) => s.acts)) };
 }

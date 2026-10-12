@@ -5,6 +5,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { accountTypeName } from "../bank/products.ts";
 import type { BankConfig } from "../bank/schema.ts";
 import type { RunResult } from "../harness/run.ts";
 import { DEFAULT_MODEL, readApiKey } from "../harness/llm.ts";
@@ -65,6 +66,7 @@ async function main() {
     const ctx = (history: Job["ctx"]["history"]): ExtractContext => ({
       bankName: config?.bank.name,
       products: config ? Object.values(config.products).map((p) => p.displayName) : [],
+      accountTypes: (config?.accountTypes ?? ["checking", "savings"]).map(accountTypeName),
       history,
     });
     const said = result.turns.filter((t): t is { role: "agent" | "user"; content: string } => t.role !== "tool");
@@ -77,33 +79,48 @@ async function main() {
 
   const results: TurnResult[] = await pool(todo, 6, (j) => extractRepeated(apiKey, model, j.ctx, j.text, times));
 
-  const report = todo.map((j, i) => ({
-    run: j.run,
-    turn: j.turn,
-    text: j.text,
-    agreed: results[i]!.agreed,
-    consensus: results[i]!.consensus.map(renderAct),
-    disputed: results[i]!.disputed.map(renderAct),
-    samples: results[i]!.samples.map((s) => ({ acts: s.acts, rendered: s.acts.map(renderAct), errors: s.errors })),
-  }));
+  const report = todo.map((j, i) => {
+    const r = results[i]!;
+    const errors = [...new Set(r.samples.flatMap((s) => s.errors))];
+    const dropped = [...new Set(r.samples.flatMap((s) => s.dropped))];
+    return {
+      run: j.run,
+      turn: j.turn,
+      text: j.text,
+      identical: r.conflicts.length === 0 && r.omissions.length === 0 && errors.length === 0,
+      decisionsAgree: r.decisionsAgree,
+      conflicts: r.conflicts,
+      omissions: r.omissions,
+      errors,
+      dropped,
+      consensus: r.consensus.map(renderAct),
+      samples: r.samples.map((s) => ({ acts: s.acts, rendered: s.acts.map(renderAct), errors: s.errors })),
+    };
+  });
   const outDir = join(arg("out", "scratch/extract"), new Date().toISOString().replace(/[:.]/g, "-"));
   mkdirSync(outDir, { recursive: true });
   writeFileSync(join(outDir, "report.json"), JSON.stringify(report, null, 2));
 
   for (const r of report) {
-    console.log(`\n${r.agreed ? "agree   " : "DISAGREE"} ${r.run} turn ${r.turn}`);
+    const mark = r.identical ? "same     " : r.decisionsAgree ? "facts    " : "DECISIONS";
+    console.log(`\n${mark} ${r.run} turn ${r.turn}`);
     console.log(`  agent: ${r.text.replace(/\s+/g, " ").slice(0, 300)}`);
     console.log(`  consensus:\n    ${r.consensus.join("\n    ")}`);
-    if (r.disputed.length > 0) console.log(`  disputed (dropped):\n    ${r.disputed.join("\n    ")}`);
-    for (const e of new Set(r.samples.flatMap((s) => s.errors))) console.log(`  error in a sample: ${e}`);
+    for (const c of r.conflicts) console.log(`  conflict: ${c}`);
+    for (const o of r.omissions) console.log(`  omitted by some: ${o}`);
+    for (const e of r.errors) console.log(`  error in a sample: ${e}`);
+    for (const d of r.dropped) console.log(`  dropped in a sample: ${d}`);
   }
-  const agreed = report.filter((r) => r.agreed).length;
-  const unknown = report.filter((r) => r.samples.some((s) => s.acts.some((a) => a.act === "unknown"))).length;
-  const invalid = report.filter((r) => r.samples.some((s) => s.errors.length > 0)).length;
-  const disputed = report.filter((r) => r.disputed.length > 0).length;
+  const count = (f: (r: (typeof report)[number]) => boolean) => report.filter(f).length;
   console.log(
-    `\n${agreed} of ${report.length} turns agree across ${times} samples; ${unknown} with an unknown act; ` +
-      `${invalid} with validation errors; ${disputed} with an act dropped by the vote`,
+    `\n${report.length} turns, ${times} samples each:` +
+      `\n  identical samples: ${count((r) => r.identical)}` +
+      `\n  same decisions (what the customer's reply depends on): ${count((r) => r.decisionsAgree)}` +
+      `\n  a fact with conflicting values: ${count((r) => r.conflicts.length > 0)}` +
+      `\n  a fact some samples missed: ${count((r) => r.omissions.length > 0)}` +
+      `\n  validation errors: ${count((r) => r.errors.length > 0)}` +
+      `\n  a number or date the agent never said, dropped: ${count((r) => r.dropped.length > 0)}` +
+      `\n  an unknown act: ${count((r) => r.samples.some((s) => s.acts.some((a) => a.act === "unknown")))}`,
   );
   console.log(`report: ${join(outDir, "report.json")}`);
 }
