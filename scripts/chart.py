@@ -27,7 +27,7 @@ FAMILIES = [
 
 
 def load(run_dir: str) -> list[dict]:
-    runs = [json.loads(p.read_text()) for p in Path(run_dir).glob("*.json") if p.name != "meta.json"]
+    runs = [json.loads(p.read_text(encoding="utf-8")) for p in Path(run_dir).glob("*.json") if p.name != "meta.json"]
     return [r for r in runs if r["result"]["evaluation"]["endReason"] != "off_script"]
 
 
@@ -58,7 +58,7 @@ def main() -> None:
     ax.set_xlim(0, 115)
     ax.set_xlabel("Pass rate (%)")
     ax.set_title("Pass rate by task family (scripted customer)")
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=len(models), fontsize=8, frameon=False)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=min(2, len(models)), fontsize=8, frameon=False)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     fig.tight_layout()
