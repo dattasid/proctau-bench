@@ -19,8 +19,8 @@ import { newState, step } from "../script/engine.ts";
 import { rephrase } from "../script/rephrase.ts";
 import type { CustomerAct, Trigger } from "../script/types.ts";
 import { ConsentTracker } from "./consent.ts";
-import { chat } from "./llm.ts";
-import type { ChatMessage, ChatRouting, ChatTool } from "./llm.ts";
+import { chat, newSpend, withSpend } from "./llm.ts";
+import type { ChatMessage, ChatRouting, ChatTool, Spend } from "./llm.ts";
 import { GREETING, OUT_OF_SCOPE, STOP, TRANSFER, agentSystemPrompt, userSystemPrompt } from "./prompts.ts";
 
 export type Turn =
@@ -45,6 +45,7 @@ export interface RunResult {
   agentModel: string;
   agentRouting?: ChatRouting;
   agentProviders?: Record<string, number>; // agent replies per provider that answered
+  spend?: Spend; // tokens and dollars, agent and simulator
   userModel: string;
   prompts: { agent: string; user: string }; // system prompts exactly as sent
   turns: Turn[];
@@ -81,7 +82,14 @@ function parseArgs(raw: string): unknown {
   }
 }
 
+// Runs one task with its own spend meter, so tasks in parallel never mix their costs.
 export async function runTask(bank: Bank, task: Task, opts: RunOptions): Promise<RunResult> {
+  const spend = newSpend();
+  const result = await withSpend(spend, () => runConversation(bank, task, opts));
+  return { ...result, spend };
+}
+
+async function runConversation(bank: Bank, task: Task, opts: RunOptions): Promise<RunResult> {
   const maxTurns = opts.maxTurns ?? 25;
   const maxToolCalls = opts.maxToolCallsPerTurn ?? 12;
   const env = await EnvClient.create(opts.baseUrl, bank.config, task.db);
@@ -157,7 +165,7 @@ export async function runTask(bank: Bank, task: Task, opts: RunOptions): Promise
       agentMsgs.push({ role: "user", content: said });
 
       for (let calls = 0; ; ) {
-        const a = await chat(opts.apiKey, opts.agentModel, agentMsgs, { tools, temperature: 0, routing: opts.agentRouting });
+        const a = await chat(opts.apiKey, opts.agentModel, agentMsgs, { tools, temperature: 0, routing: opts.agentRouting, side: "agent" });
         if (a.provider) agentProviders[a.provider] = (agentProviders[a.provider] ?? 0) + 1;
         if (a.toolCalls.length === 0) {
           agentSays((a.content ?? "").trim());

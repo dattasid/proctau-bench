@@ -1,6 +1,31 @@
 // Minimal OpenAI-format chat client for OpenRouter, with tool calls and retries.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, readFileSync } from "node:fs";
+
+// What calls cost, as OpenRouter reports it, split between the agent under test and the simulator
+// (customer, extractor, rephraser). A task's calls add to the Spend it runs under (see withSpend),
+// so tasks running in parallel each keep their own.
+export interface Tally {
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  reasoningTokens: number;
+  cost: number; // dollars
+}
+export interface Spend {
+  agent: Tally;
+  simulator: Tally;
+}
+const tally = (): Tally => ({ calls: 0, promptTokens: 0, completionTokens: 0, reasoningTokens: 0, cost: 0 });
+export const newSpend = (): Spend => ({ agent: tally(), simulator: tally() });
+export function addSpend(into: Spend, from: Spend): void {
+  for (const side of ["agent", "simulator"] as const) {
+    for (const k of Object.keys(into[side]) as (keyof Tally)[]) into[side][k] += from[side][k];
+  }
+}
+const meters = new AsyncLocalStorage<Spend>();
+export const withSpend = <T>(spend: Spend, fn: () => Promise<T>): Promise<T> => meters.run(spend, fn);
 
 export interface ToolCall {
   id: string;
@@ -21,7 +46,12 @@ export interface ChatTool {
 export interface ChatReply {
   content: string | null;
   toolCalls: ToolCall[];
-  usage?: { prompt_tokens: number; completion_tokens: number };
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    cost?: number;
+    completion_tokens_details?: { reasoning_tokens?: number };
+  };
   provider?: string; // the OpenRouter provider that answered
 }
 
@@ -49,7 +79,8 @@ export async function chat(
   apiKey: string,
   model: string,
   messages: ChatMessage[],
-  options: { tools?: ChatTool[]; temperature?: number; routing?: ChatRouting } = {},
+  // side: whose spend the call counts toward; everything but the agent is the simulator.
+  options: { tools?: ChatTool[]; temperature?: number; routing?: ChatRouting; side?: keyof Spend } = {},
 ): Promise<ChatReply> {
   const routing = options.routing ?? {};
   const body = JSON.stringify({
@@ -97,6 +128,15 @@ export async function chat(
     if (!message) {
       lastError = data.error?.message ?? `no choices in response: ${text.slice(0, 300)}`;
       continue;
+    }
+    const spend = meters.getStore();
+    if (spend) {
+      const t = spend[options.side ?? "simulator"];
+      t.calls++;
+      t.promptTokens += data.usage?.prompt_tokens ?? 0;
+      t.completionTokens += data.usage?.completion_tokens ?? 0;
+      t.reasoningTokens += data.usage?.completion_tokens_details?.reasoning_tokens ?? 0;
+      t.cost += data.usage?.cost ?? 0;
     }
     return { content: message.content, toolCalls: message.tool_calls ?? [], usage: data.usage, provider: data.provider };
   }

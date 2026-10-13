@@ -23,7 +23,7 @@ import { createEnvServer } from "../env/server.ts";
 import { TEMPLATES, buildTasks } from "../gen/tasks.ts";
 import type { Task } from "../gen/tasks.ts";
 import type { Bank } from "../gen/generate.ts";
-import { DEFAULT_MODEL, readApiKey } from "./llm.ts";
+import { DEFAULT_MODEL, addSpend, newSpend, readApiKey } from "./llm.ts";
 import type { ChatRouting } from "./llm.ts";
 import { agentSystemPrompt } from "./prompts.ts";
 import { runTask } from "./run.ts";
@@ -128,6 +128,7 @@ const parallel = Math.max(1, Number(values.parallel));
 let passed = 0;
 let total = 0;
 const failedRuns: string[] = [];
+const spend = newSpend(); // completed tasks only
 try {
   let next = 0;
   const worker = async () => {
@@ -144,6 +145,7 @@ try {
           agentRouting,
         });
         writeJson(join(runDir, `${task.id.replace(/:/g, "_")}.json`), { task, result });
+        if (result.spend) addSpend(spend, result.spend);
         const e = result.evaluation;
         total++;
         if (e.pass) passed++;
@@ -166,7 +168,8 @@ try {
   await Promise.all(Array.from({ length: Math.min(parallel, jobs.length) }, worker));
 } finally {
   server?.close();
-  writeJson(join(runDir, "meta.json"), { ...meta, finishedAt: new Date().toISOString(), passed, total, failedRuns });
+  writeJson(join(runDir, "meta.json"), { ...meta, finishedAt: new Date().toISOString(), passed, total, failedRuns, spend });
 }
 console.log(`${passed}/${total} passed; runs written to ${runDir}`);
+console.log(`cost: agent $${spend.agent.cost.toFixed(4)}, simulator $${spend.simulator.cost.toFixed(4)}, total $${(spend.agent.cost + spend.simulator.cost).toFixed(4)}`);
 if (failedRuns.length > 0) console.log(`${failedRuns.length} runs failed to complete and are not counted: ${failedRuns.join(", ")}`);
