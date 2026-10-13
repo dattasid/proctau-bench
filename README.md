@@ -15,6 +15,20 @@ The difference is that nothing is fixed. Every bank is generated from a seed, an
 
 ## What is new here
 
+**A customer that stays on script.** In benchmarks like this, two LLMs talk to each other, and the
+simulated customer is often the weak link. It forgets a detail, agrees to the wrong plan, makes
+something up or ends the call early, and cheaper models do this more. Then the score partly measures
+the customer, not the agent.
+
+Here the customer is run by code. An extractor LLM turns each agent reply into machine-readable acts,
+such as `request_info(field="date_of_birth")` or
+`mentions_eligible_date(product="Gold Savings", date="2026-05-02")`. Plain code then picks the
+customer's next move from a script: give this detail, agree only if the plan matches the goal,
+correct the agent if it doesn't, ask for a human if refused. An LLM only puts that move into words,
+and code checks that names, dates and amounts survived. The customer cannot drift, however long the
+conversation, and it can be told to make specific mistakes, like giving a wrong date of birth first
+and correcting it when asked.
+
 **Randomized rates and policies.** Each seed gives a different bank: its products, interest rates,
 fees, fee waivers, opening requirements and policies such as identity checks, courtesy refund caps
 and transfer limits. The bank's config is the single source of truth. The agent's documents, the
@@ -31,13 +45,6 @@ rule come out true or false and are checked against the rules. Mistakes can be p
 such as a fee charged although the waiver was met, and an independent audit must find exactly the
 planted ones.
 
-**A customer controlled by code.** An extractor LLM turns each agent reply into machine-readable
-acts, such as `request_info(field="date_of_birth")` or
-`mentions_eligible_date(product="Gold Savings", date="2026-05-02")`. Plain code then decides the
-customer's next move from a script, and an LLM only puts that move into words, with code checking
-that names, dates and amounts survived. The customer cannot drift off script, however long the
-conversation. It can also be told to make mistakes, like giving a wrong date of birth first and
-correcting it when asked.
 
 ## Tasks today
 
