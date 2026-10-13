@@ -108,6 +108,8 @@ function sentence(a: CustomerAct): string {
       return `I'm sorry, I gave you the wrong ${FIELD_NAMES[a.field]}. It's ${spoken(a.field, a.value)}.`;
     case "repeat_info":
       return "I'm quite sure the details I gave are right.";
+    case "ask_recheck":
+      return "Are you sure you can't find me?";
     case "acknowledge":
       return "Okay.";
     case "thank_and_end":

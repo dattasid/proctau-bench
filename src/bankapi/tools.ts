@@ -70,8 +70,8 @@ function identity(s: BankSession, customerId: string | undefined, write: boolean
 
 function accountCheck(s: BankSession, rule: string, id: string): { check: Check; account?: Account } {
   const account = s.db.accounts[id];
-  if (!account) return { check: system(rule, false, `No account with id ${id}.`) };
-  if (account.status !== "open") return { check: system(rule, false, `Account ${id} is closed.`), account };
+  if (!account) return { check: system(rule, false, `No account with id "${id}".`) };
+  if (account.status !== "open") return { check: system(rule, false, `Account "${id}" is closed.`), account };
   return { check: system(rule, true, `account ${id} found`), account };
 }
 
@@ -130,7 +130,7 @@ export const TOOLS: Tool[] = [
     write: false,
     plan: (s, args) => {
       const customer = s.db.customers[str(args, "customerId")];
-      if (!customer) return nothing([system("customer.exists", false, `No customer with id ${str(args, "customerId")}.`)]);
+      if (!customer) return nothing([system("customer.exists", false, `No customer with id "${str(args, "customerId")}".`)]);
       return {
         checks: [system("customer.exists", true, "customer found")],
         apply: () => {
@@ -148,7 +148,7 @@ export const TOOLS: Tool[] = [
     write: false,
     plan: (s, args) => {
       const id = str(args, "customerId");
-      if (!s.db.customers[id]) return nothing([system("customer.exists", false, `No customer with id ${id}.`)]);
+      if (!s.db.customers[id]) return nothing([system("customer.exists", false, `No customer with id "${id}".`)]);
       return {
         checks: [system("customer.exists", true, "customer found"), identity(s, id, false)],
         apply: () => ({
@@ -170,7 +170,7 @@ export const TOOLS: Tool[] = [
     write: false,
     plan: (s, args) => {
       const account = s.db.accounts[str(args, "accountId")];
-      if (!account) return nothing([system("account.exists", false, `No account with id ${str(args, "accountId")}.`)]);
+      if (!account) return nothing([system("account.exists", false, `No account with id "${str(args, "accountId")}".`)]);
       const from = (args.fromDate as string | undefined) ?? "0000-01-01";
       const to = (args.toDate as string | undefined) ?? "9999-12-31";
       return {
@@ -205,7 +205,7 @@ export const TOOLS: Tool[] = [
       const customerId = str(args, "customerId");
       const productId = str(args, "productId");
       const deposit = cents(num(args, "initialDeposit"));
-      if (!s.db.customers[customerId]) return nothing([system("customer.exists", false, `No customer with id ${customerId}.`)]);
+      if (!s.db.customers[customerId]) return nothing([system("customer.exists", false, `No customer with id "${customerId}".`)]);
       const funding = accountCheck(s, "funding.account", str(args, "fundingAccountId"));
       const checks: Check[] = [system("customer.exists", true, "customer found"), funding.check];
       const source = funding.account;
@@ -296,7 +296,7 @@ export const TOOLS: Tool[] = [
     plan: (s, args) => {
       const fee = s.db.transactions.find((t) => t.id === str(args, "transactionId"));
       if (!fee || fee.kind !== "monthly_fee") {
-        return nothing([system("refund.is_fee", false, `Transaction ${str(args, "transactionId")} is not a monthly fee.`)]);
+        return nothing([system("refund.is_fee", false, `Transaction "${str(args, "transactionId")}" is not a monthly fee.`)]);
       }
       const account = s.db.accounts[fee.accountId]!;
       const refunded = s.db.transactions.some((t) => t.relatedId === fee.id && (t.kind === "fee_correction" || t.kind === "fee_reversal"));
@@ -339,7 +339,7 @@ export const TOOLS: Tool[] = [
     write: false,
     plan: (s, args) => {
       const account = s.db.accounts[str(args, "accountId")];
-      if (!account) return nothing([system("account.exists", false, `No account with id ${str(args, "accountId")}.`)]);
+      if (!account) return nothing([system("account.exists", false, `No account with id "${str(args, "accountId")}".`)]);
       const month = str(args, "month");
       const valid = /^\d{4}-\d{2}$/.test(month) && monthStart(addMonths(month, 1)) <= s.now && month >= monthOf(account.openedOn);
       const checks = [
@@ -383,7 +383,7 @@ export const TOOLS: Tool[] = [
     write: true,
     plan: (s, args) => {
       const account = s.db.accounts[str(args, "accountId")];
-      if (!account) return nothing([system("account.exists", false, `No account with id ${str(args, "accountId")}.`)]);
+      if (!account) return nothing([system("account.exists", false, `No account with id "${str(args, "accountId")}".`)]);
       const kind = str(args, "kind") as Ticket["kind"];
       const month = args.month as string | undefined;
       const expected = args.expectedInterest as number | undefined;

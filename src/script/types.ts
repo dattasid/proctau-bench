@@ -79,6 +79,7 @@ export type Reply =
   | "insist"
   | "ask_for_human"
   | "correct_identity"
+  | "give_identity"
   | "acknowledge"
   | "thank_and_end"
   | "end";
@@ -96,6 +97,7 @@ export type CustomerAct =
   | { act: "ask_for_human" }
   | { act: "correct_info"; field: InfoField; value: string | number }
   | { act: "repeat_info" }
+  | { act: "ask_recheck" }
   | { act: "acknowledge" }
   | { act: "thank_and_end" };
 

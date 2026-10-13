@@ -63,6 +63,7 @@ export interface RunOptions {
   userModel: string;
   maxTurns?: number;
   maxToolCallsPerTurn?: number;
+  maxToolCalls?: number; // over the whole task: a weak agent stuck in a loop stops here, not at max turns
   customer?: "llm" | "scripted";
   extractSamples?: number; // scripted: extractor samples per agent turn, voted per act
   agentRouting?: ChatRouting; // provider and reasoning budget for the agent only
@@ -91,7 +92,9 @@ export async function runTask(bank: Bank, task: Task, opts: RunOptions): Promise
 
 async function runConversation(bank: Bank, task: Task, opts: RunOptions): Promise<RunResult> {
   const maxTurns = opts.maxTurns ?? 25;
-  const maxToolCalls = opts.maxToolCallsPerTurn ?? 12;
+  const maxToolCallsPerTurn = opts.maxToolCallsPerTurn ?? 12;
+  const maxToolCalls = opts.maxToolCalls ?? 30;
+  let totalCalls = 0;
   const env = await EnvClient.create(opts.baseUrl, bank.config, task.db);
   const tools: ChatTool[] = (await env.tools()).map((t) => ({ type: "function", function: t }));
 
@@ -186,7 +189,8 @@ async function runConversation(bank: Bank, task: Task, opts: RunOptions): Promis
           break conversation;
         }
         calls += a.toolCalls.length;
-        if (calls >= maxToolCalls) {
+        totalCalls += a.toolCalls.length;
+        if (calls >= maxToolCallsPerTurn || totalCalls >= maxToolCalls) {
           endReason = "tool_limit";
           break conversation;
         }

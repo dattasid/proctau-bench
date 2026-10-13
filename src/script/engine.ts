@@ -13,7 +13,8 @@ export const SHARED_REACTIONS: Record<Trigger, Reply[]> = {
   closing: ["end"],
   done: ["thank_and_end"],
   date_given: ["thank_and_end"],
-  verification_failed: ["correct_identity"],
+  // A human helps a struggling agent: after two corrections, every identity detail in one message.
+  verification_failed: ["correct_identity", "correct_identity", "give_identity"],
   refused: ["ask_why", "thank_and_end"],
   transfer_offered: ["confirm"],
   confirm_mismatch: ["correct"],
@@ -23,6 +24,8 @@ export const SHARED_REACTIONS: Record<Trigger, Reply[]> = {
   greeted: ["state_goal"],
   statement: ["acknowledge"],
 };
+
+const IDENTITY_FIELDS: InfoField[] = ["full_name", "date_of_birth", "ssn_last4"];
 
 export interface EngineState {
   fired: Partial<Record<Trigger, number>>; // how many times each trigger has been answered
@@ -158,6 +161,7 @@ function replyAct(reply: Reply, script: CustomerScript, acts: Act[]): CustomerAc
       return { act: "decline", goal: script.goal };
     case "end":
     case "correct_identity": // handled in step, which knows what was given
+    case "give_identity":
       return null;
     default:
       return { act: reply };
@@ -202,6 +206,16 @@ export function step(script: CustomerScript, state: EngineState, acts: Act[]): S
     }
     const acts = [...info, ...(fix.length > 0 || info.length > 0 ? fix : [{ act: "repeat_info" } as const])];
     return { acts, end: null, trigger, flags };
+  }
+  if (reply === "give_identity") {
+    const all: CustomerAct[] = [];
+    for (const field of IDENTITY_FIELDS) {
+      const value = script.knows[field];
+      if (value === undefined || info.some((i) => "field" in i && i.field === field)) continue;
+      all.push({ act: "give_info", field, value });
+      state.given[field] = (state.given[field] ?? 0) + 1;
+    }
+    return { acts: [...info, ...all, { act: "ask_recheck" }], end: null, trigger, flags };
   }
   const main = replyAct(reply, script, known);
   // Information answers already reply to a turn that only states things.

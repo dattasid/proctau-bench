@@ -137,6 +137,21 @@ describe("script engine", () => {
     assert.deepEqual(again.acts, [{ act: "give_info", field: "date_of_birth", value: "1980-02-03" }]);
   });
 
+  it("corrects twice when verification keeps failing, then gives every identity detail and asks to look again", () => {
+    const slip: CustomerScript = { ...eligible, wrongFirst: { ssn_last4: "1235" } };
+    const state = newState();
+    step(slip, state, [act("request_info", { field: "ssn_last4" })]);
+    const failed = () => step(slip, state, [act("report_verification", { subject: "identity", passed: false })]).acts;
+    assert.deepEqual(failed(), [{ act: "correct_info", field: "ssn_last4", value: "1234" }]);
+    assert.deepEqual(failed(), [{ act: "correct_info", field: "ssn_last4", value: "1234" }]);
+    assert.deepEqual(failed(), [
+      { act: "give_info", field: "full_name", value: "Ada Quinn" },
+      { act: "give_info", field: "date_of_birth", value: "1980-02-03" },
+      { act: "give_info", field: "ssn_last4", value: "1234" },
+      { act: "ask_recheck" },
+    ]);
+  });
+
   it("handover goal: reports the purchase, asks for a human when the agent can't help", () => {
     const report: CustomerScript = {
       ...eligible,

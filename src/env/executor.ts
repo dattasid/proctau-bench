@@ -61,7 +61,7 @@ function shapeErrors(tool: Tool, args: unknown, config: BankConfig): string[] {
   if (typeof args !== "object" || args === null || Array.isArray(args)) return ["arguments must be an object"];
   const errors: string[] = [];
   const given = args as Record<string, unknown>;
-  for (const key of Object.keys(given)) if (!(key in tool.params)) errors.push(`unknown argument ${key}`);
+  for (const key of Object.keys(given)) if (!(key in tool.params)) errors.push(`unknown argument "${key}"`);
   for (const [key, p] of Object.entries(tool.params) as [string, Param][]) {
     const v = given[key];
     if (v === undefined || v === null) {
@@ -91,7 +91,7 @@ export function callTool(s: Session, name: string, args: unknown): TraceRecord {
   };
 
   const tool = byName.get(name);
-  if (!tool) return finish({ shapeErrors: [`unknown tool ${name}`], checks: [], outcome: "invalid", result: { error: `Unknown tool ${name}.` }, changes: [] });
+  if (!tool) return finish({ shapeErrors: [`unknown tool "${name}"`], checks: [], outcome: "invalid", result: { error: `Unknown tool "${name}".` }, changes: [] });
   const converted = coerce(tool, args);
   args = converted.args;
   if (converted.coerced.length > 0) Object.assign(base, { coerced: converted.coerced });
