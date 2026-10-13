@@ -22,6 +22,15 @@ export interface ChatReply {
   content: string | null;
   toolCalls: ToolCall[];
   usage?: { prompt_tokens: number; completion_tokens: number };
+  provider?: string; // the OpenRouter provider that answered
+}
+
+// Where OpenRouter sends a request and how much the model may reason. provider: endpoint slugs as
+// OpenRouter lists them (e.g. "coreweave/fp16"), tried in order with no fallback to others.
+// reasoning: an effort level, or a token budget; ignored by models that do not reason.
+export interface ChatRouting {
+  provider?: string[];
+  reasoning?: { effort: "minimal" | "low" | "medium" | "high" } | { max_tokens: number };
 }
 
 const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
@@ -40,13 +49,16 @@ export async function chat(
   apiKey: string,
   model: string,
   messages: ChatMessage[],
-  options: { tools?: ChatTool[]; temperature?: number } = {},
+  options: { tools?: ChatTool[]; temperature?: number; routing?: ChatRouting } = {},
 ): Promise<ChatReply> {
+  const routing = options.routing ?? {};
   const body = JSON.stringify({
     model,
     messages,
     ...(options.tools && options.tools.length > 0 ? { tools: options.tools } : {}),
     ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+    ...(routing.provider?.length ? { provider: { order: routing.provider, allow_fallbacks: false } } : {}),
+    ...(routing.reasoning ? { reasoning: routing.reasoning } : {}),
   });
   let lastError = "";
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -71,6 +83,7 @@ export async function chat(
     const data = JSON.parse(text) as {
       choices?: { message: { content: string | null; tool_calls?: ToolCall[] } }[];
       usage?: ChatReply["usage"];
+      provider?: string;
       error?: { message: string };
     };
     const message = data.choices?.[0]?.message;
@@ -78,7 +91,7 @@ export async function chat(
       lastError = data.error?.message ?? `no choices in response: ${text.slice(0, 300)}`;
       continue;
     }
-    return { content: message.content, toolCalls: message.tool_calls ?? [], usage: data.usage };
+    return { content: message.content, toolCalls: message.tool_calls ?? [], usage: data.usage, provider: data.provider };
   }
   throw new Error(`OpenRouter request failed after retries: ${lastError}`);
 }

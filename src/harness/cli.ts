@@ -1,5 +1,8 @@
 // Usage: npm run harness -- [--seed N] [--count K] [--template ID] [--tasks-per-bank T]
-//          [--agent-model M] [--user-model M] [--server URL] [--out DIR]
+//          [--agent-model M] [--agent-provider P[,P]] [--agent-reasoning low|N]
+//          [--user-model M] [--server URL] [--out DIR]
+// --agent-provider: OpenRouter endpoints for the agent, e.g. coreweave/fp16; no fallback to others.
+// --agent-reasoning: the agent's reasoning effort (minimal, low, medium, high) or a token budget.
 //          [--customer llm|scripted] [--extract-samples N] [--wrong-identity-rate R]
 // --wrong-identity-rate: share of tasks whose customer gives one identity detail wrong first (default 0.25).
 // --tasks-per-bank: draw more task variants until each bank has T tasks (default: one per template).
@@ -18,6 +21,7 @@ import { generateBank } from "../gen/generate.ts";
 import { createEnvServer } from "../env/server.ts";
 import { TEMPLATES, buildTasks } from "../gen/tasks.ts";
 import { DEFAULT_MODEL, readApiKey } from "./llm.ts";
+import type { ChatRouting } from "./llm.ts";
 import { agentSystemPrompt } from "./prompts.ts";
 import { runTask } from "./run.ts";
 
@@ -32,6 +36,8 @@ const { values } = parseArgs({
     "extract-samples": { type: "string", default: "1" },
     "wrong-identity-rate": { type: "string" },
     "agent-model": { type: "string", default: DEFAULT_MODEL },
+    "agent-provider": { type: "string" },
+    "agent-reasoning": { type: "string" },
     "user-model": { type: "string", default: DEFAULT_MODEL },
     server: { type: "string" },
     out: { type: "string", default: "out/runs" },
@@ -50,6 +56,24 @@ if (templateFilter && !TEMPLATES.some((t) => templateFilter.some((re) => re.test
   process.exit(1);
 }
 
+// The agent's provider (comma list, tried in order, no fallback) and reasoning budget (an effort
+// level, or a number of tokens).
+const reasoningArg = values["agent-reasoning"]?.trim();
+const efforts = ["minimal", "low", "medium", "high"] as const;
+if (reasoningArg && !/^\d+$/.test(reasoningArg) && !(efforts as readonly string[]).includes(reasoningArg)) {
+  console.error(`--agent-reasoning must be one of ${efforts.join(", ")} or a number of tokens`);
+  process.exit(1);
+}
+const agentRouting: ChatRouting | undefined =
+  values["agent-provider"] || reasoningArg
+    ? {
+        ...(values["agent-provider"] ? { provider: values["agent-provider"].split(",").map((p) => p.trim()).filter(Boolean) } : {}),
+        ...(reasoningArg
+          ? { reasoning: /^\d+$/.test(reasoningArg) ? { max_tokens: Number(reasoningArg) } : { effort: reasoningArg as (typeof efforts)[number] } }
+          : {}),
+      }
+    : undefined;
+
 const apiKey = readApiKey();
 let baseUrl = values.server;
 const server = baseUrl ? null : createEnvServer();
@@ -67,6 +91,7 @@ const meta: Record<string, unknown> = {
   count: Number(values.count),
   template: values.template ?? null,
   agentModel: values["agent-model"],
+  agentRouting: agentRouting ?? null,
   userModel: values["user-model"],
   customer: values.customer,
   extractSamples: Number(values["extract-samples"]),
@@ -100,6 +125,7 @@ try {
           userModel: values["user-model"],
           customer: values.customer === "scripted" ? "scripted" : "llm",
           extractSamples: Number(values["extract-samples"]),
+          agentRouting,
         });
         writeJson(join(runDir, `${task.id.replace(/:/g, "_")}.json`), { task, result });
         const e = result.evaluation;
