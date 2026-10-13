@@ -30,6 +30,9 @@ export interface Evaluation {
   // customer, whose acts show what was asked and answered; null when not measured.
   consentMissing: { index: number; tool: string }[] | null;
   counts: { calls: number; invalid: number; error: number; blocked: number; executed: number };
+  // Arguments sent as text that the executor converted to a number or boolean. Not part of `pass`;
+  // a trainer may penalize them.
+  formatSlips: number;
   endReason: EndReason;
   pass: boolean;
 }
@@ -57,6 +60,7 @@ export function evaluate(
     missingCalls,
     consentMissing,
     counts: { calls: trace.length, invalid: count("invalid"), error: count("error"), blocked: count("blocked"), executed: count("executed") },
+    formatSlips: trace.reduce((n, r) => n + (r.coerced?.length ?? 0), 0),
     endReason,
     // A blocked attempt still fails: the agent tried something the policy forbids.
     pass: dbMatch && violations.length === 0 && blockedAttempts.length === 0 && missingCalls.length === 0 && !consentMissing?.length,

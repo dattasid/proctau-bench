@@ -43,6 +43,28 @@ function openPremiumSavings(s: Session, customerId: string, fundingAccountId: st
   return callTool(s, "open_account", { customerId, productId: "savings_premium", initialDeposit: deposit, fundingAccountId });
 }
 
+describe("text values", () => {
+  it("converts an unambiguous number or boolean, records it, and still checks the converted value", () => {
+    const { customer, checking, session } = setup();
+    verify(session, customer.id);
+    const savings = openPremiumSavings(session, customer.id, checking.id);
+    const moved = callTool(session, "transfer_funds", { fromAccountId: checking.id, toAccountId: (savings.result as { account: { accountId: string } }).account.accountId, amount: " 250 " });
+    assert.equal(moved.outcome, "executed");
+    assert.deepEqual(moved.coerced, [{ arg: "amount", from: " 250 ", to: 250 }]);
+    assert.deepEqual(moved.args, { fromAccountId: checking.id, toAccountId: (moved.args as { toAccountId: string }).toAccountId, amount: " 250 " });
+    // Converted, then refused by the money check like any other number.
+    const cents = callTool(session, "transfer_funds", { fromAccountId: checking.id, toAccountId: checking.id, amount: "10.555" });
+    assert.equal(cents.outcome, "invalid");
+    assert.match(cents.shapeErrors.join(), /at most two decimals/);
+    // Not unambiguous: left as text, and invalid.
+    assert.equal(callTool(session, "transfer_funds", { fromAccountId: checking.id, toAccountId: checking.id, amount: "$250" }).outcome, "invalid");
+    const month = addDays(session.now, -40).slice(0, 7);
+    const interest = callTool(session, "calculate_interest", { accountId: checking.id, month, method: "average_daily_balance", includeBonus: "TRUE" });
+    assert.deepEqual(interest.coerced, [{ arg: "includeBonus", from: "TRUE", to: true }]);
+    assert.equal(interest.outcome, "executed");
+  });
+});
+
 describe("tool list", () => {
   it("exposes every tool with a JSON schema", () => {
     const config = sampleBank(createRng(1), 1);

@@ -22,11 +22,19 @@ export interface Change {
 
 export type Outcome = "invalid" | "error" | "blocked" | "executed";
 
+// A text argument the executor converted to the number or boolean the tool expects.
+export interface Coercion {
+  arg: string;
+  from: string;
+  to: number | boolean;
+}
+
 export interface TraceRecord {
   index: number;
   at: string; // simulated date
   tool: string;
-  args: unknown;
+  args: unknown; // as the agent sent them
+  coerced?: Coercion[]; // formatting slips the executor converted before checking
   shapeErrors: string[];
   checks: RecordedCheck[];
   outcome: Outcome;

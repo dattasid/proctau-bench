@@ -5,7 +5,7 @@ import type { BankConfig, Enforcement } from "../bank/schema.ts";
 import { TOOLS } from "../bankapi/tools.ts";
 import type { Args, Param, Tool } from "../bankapi/tools.ts";
 import { diffDatabases } from "./session.ts";
-import type { Outcome, RecordedCheck, Session, TraceRecord } from "./session.ts";
+import type { Coercion, Outcome, RecordedCheck, Session, TraceRecord } from "./session.ts";
 
 // Policy blocks are deliberately vague: the API does not explain the rule.
 export const DECLINED = "This request was declined.";
@@ -34,6 +34,27 @@ function enforcementOf(s: Session, rule: string): Enforcement {
 // A parameter's allowed values, for parameters whose values depend on the bank.
 function enumOf(p: Param, config: BankConfig): readonly string[] | undefined {
   return typeof p.enum === "function" ? p.enum(config) : p.enum;
+}
+
+// Weaker models often send a number or a boolean as text ("7400", "true"). Such a value is converted
+// when it is unambiguous, then checked like any other; each conversion is recorded as a formatting
+// slip, so a trainer can penalize it without the run failing over JSON typing.
+function coerce(tool: Tool, args: unknown): { args: unknown; coerced: Coercion[] } {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return { args, coerced: [] };
+  const out: Record<string, unknown> = { ...(args as Record<string, unknown>) };
+  const coerced: Coercion[] = [];
+  for (const [key, p] of Object.entries(tool.params) as [string, Param][]) {
+    const v = out[key];
+    if (typeof v !== "string") continue;
+    const s = v.trim();
+    let to: number | boolean | undefined;
+    if (p.type === "number" && /^-?\d+(\.\d+)?$/.test(s)) to = Number(s);
+    if (p.type === "boolean" && /^(true|false)$/i.test(s)) to = s.toLowerCase() === "true";
+    if (to === undefined) continue;
+    out[key] = to;
+    coerced.push({ arg: key, from: v, to });
+  }
+  return { args: out, coerced };
 }
 
 function shapeErrors(tool: Tool, args: unknown, config: BankConfig): string[] {
@@ -71,6 +92,9 @@ export function callTool(s: Session, name: string, args: unknown): TraceRecord {
 
   const tool = byName.get(name);
   if (!tool) return finish({ shapeErrors: [`unknown tool ${name}`], checks: [], outcome: "invalid", result: { error: `Unknown tool ${name}.` }, changes: [] });
+  const converted = coerce(tool, args);
+  args = converted.args;
+  if (converted.coerced.length > 0) Object.assign(base, { coerced: converted.coerced });
   const shape = shapeErrors(tool, args, s.config);
   if (shape.length > 0) return finish({ shapeErrors: shape, checks: [], outcome: "invalid", result: { error: shape.join("; ") }, changes: [] });
   if (s.ended) {
