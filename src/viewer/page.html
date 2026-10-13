@@ -228,6 +228,7 @@ function renderRun(tab, at) {
     chip(`${e.violations.length} violations`, e.violations.length ? "bad" : ""),
     ...(e.blockedAttempts.length ? [chip(`${e.blockedAttempts.length} blocked`, "warn")] : []),
     ...((e.missingCalls ?? []).length ? [chip(`never called ${e.missingCalls.join(", ")}`, "bad")] : []),
+    ...((e.consentMissing ?? []).map((c) => chip(`NO CONSENT before ${c.tool} #${c.index}`, "bad"))),
     ...(result.script ? [chip("scripted customer")] : []),
     ...(result.script?.some((s) => s.fellBack) ? [chip(`${result.script.filter((s) => s.fellBack).length} rephraser fallbacks`, "warn")] : []),
     ...(result.script?.some((s) => s.flags.length) ? [chip("flagged turns", "warn")] : []),
@@ -364,6 +365,8 @@ function renderTask({ task, result }) {
       <dt>Ended</dt><dd>${esc(e.endReason)}</dd>
       <dt>Calls</dt><dd>${e.counts.calls} (${e.counts.executed} executed, ${e.counts.error} errors, ${e.counts.invalid} invalid, ${e.counts.blocked} blocked)</dd>
     </dl>
+    <h3>Consent</h3>${e.consentMissing == null ? `<p class="note">Not measured (only scripted runs show what the customer agreed to).</p>`
+      : list(e.consentMissing, (c) => `<li>${chip("no consent", "bad")}<a href="#" data-jump="call-${c.index}">#${c.index}</a><code>${esc(c.tool)}</code> ran without the customer's yes to it</li>`)}
     <h3>Violations</h3>${list(e.violations, (v) => `<li><a href="#" data-jump="call-${v.index}">#${v.index}</a><code>${esc(v.tool)}</code><span class="rule">${esc(v.rule)}</span></li>`)}
     ${e.blockedAttempts.length ? `<h3>Blocked attempts</h3>${list(e.blockedAttempts, (v) => `<li><a href="#" data-jump="call-${v.index}">#${v.index}</a><code>${esc(v.tool)}</code><span class="rule">${esc(v.rule)}</span></li>`)}` : ""}
     <h3>Agent notes (log_interaction)</h3>${list(result.notes, (n) => `<li>${esc(n)}</li>`)}

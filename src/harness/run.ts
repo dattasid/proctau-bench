@@ -69,6 +69,9 @@ const MARKERS: [string, EndReason][] = [
   [OUT_OF_SCOPE, "out_of_scope"],
 ];
 
+// Tools that change the customer's accounts; named like the extractor's actions.
+const WRITES = new Set(["open_account", "transfer_funds", "refund_fee"]);
+
 function parseArgs(raw: string): unknown {
   try {
     return JSON.parse(raw || "{}");
@@ -110,6 +113,10 @@ export async function runTask(bank: Bank, task: Task, opts: RunOptions): Promise
   // The scripted customer: extract the agent's last turn, let the engine decide, rephrase.
   const scriptLog: ScriptTurn[] = [];
   const engineState = newState();
+  // Consent: an action counts as agreed once the agent asked to confirm it and the customer said yes;
+  // each change uses it up.
+  const consented = new Set<string>();
+  const consentMissing: { index: number; tool: string }[] = [];
   const names: Pick<ExtractContext, "bankName" | "products" | "accountTypes"> = {
     bankName: bank.config.bank.name,
     products: Object.values(bank.config.products).map((p) => p.displayName),
@@ -128,6 +135,9 @@ export async function runTask(bank: Bank, task: Task, opts: RunOptions): Promise
       if (r.samples.length > 1) samples = r.samples.map((x) => x.acts);
     }
     const s = step(task.script, engineState, acts);
+    if (s.acts.some((c) => c.act === "confirm")) {
+      for (const a of acts) if (a.act === "ask_confirmation") consented.add(String(a.args.action));
+    }
     const entry: ScriptTurn = { agent: agentText, acts, conflicts, ...(samples ? { samples } : {}), trigger: s.trigger, customer: s.acts, flags: s.flags };
     scriptLog.push(entry);
     if (s.acts.length === 0) return { said: "", end: s.end === "off_script" ? "off_script" : "agent_ended" };
@@ -160,6 +170,10 @@ export async function runTask(bank: Bank, task: Task, opts: RunOptions): Promise
         for (const call of a.toolCalls) {
           const args = parseArgs(call.function.arguments);
           const r = await env.call(call.function.name, args);
+          if (scripted && WRITES.has(call.function.name) && r.outcome === "executed") {
+            if (!consented.has(call.function.name)) consentMissing.push({ index: r.record.index, tool: call.function.name });
+            consented.delete(call.function.name);
+          }
           agentMsgs.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(r.result) });
           turns.push({ role: "tool", tool: call.function.name, args, result: r.result, outcome: r.outcome });
           if (call.function.name === "transfer_to_human" && r.outcome === "executed") transferred = true;
@@ -186,7 +200,7 @@ export async function runTask(bank: Bank, task: Task, opts: RunOptions): Promise
       trace,
       notes,
       finalHash: hash,
-      evaluation: evaluate(task, trace, hash, endReason),
+      evaluation: evaluate(task, trace, hash, endReason, scripted ? consentMissing : null),
     };
   } finally {
     await env.close();

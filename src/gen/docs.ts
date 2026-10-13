@@ -239,6 +239,17 @@ function refundsDoc(config: BankConfig): Doc {
   };
 }
 
+function confirmingDoc(): Doc {
+  return {
+    path: "confirming_changes.md",
+    content:
+      "# Confirming before any change\n\nBefore opening an account, moving money or refunding a fee, tell the customer " +
+      "exactly what you are about to do (the product or the accounts, the amount, and for a refund whether it is a " +
+      "correction or a courtesy) and ask whether to go ahead. Act only after the customer clearly says yes in reply. " +
+      "A request the customer made earlier in the conversation is not a confirmation.\n",
+  };
+}
+
 function transfersDoc(config: BankConfig): Doc {
   const limit = config.policies.transferLimit;
   const names = limit ? limit.accountTypes.map((t) => accountTypeName(t)).join(" and ") : "";
@@ -278,6 +289,7 @@ export function renderDocs(rng: Rng, config: BankConfig): Doc[] {
     interestDoc(config, say),
     openingDoc(config),
     identityDoc(config),
+    confirmingDoc(),
     refundsDoc(config),
     transfersDoc(config),
     escalationDoc(),
