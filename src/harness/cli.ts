@@ -172,4 +172,6 @@ try {
 }
 console.log(`${passed}/${total} passed; runs written to ${runDir}`);
 console.log(`cost: agent $${spend.agent.cost.toFixed(4)}, simulator $${spend.simulator.cost.toFixed(4)}, total $${(spend.agent.cost + spend.simulator.cost).toFixed(4)}`);
+const cachedShare = (t: { promptTokens: number; cachedTokens: number }) => `${t.promptTokens ? Math.round((100 * t.cachedTokens) / t.promptTokens) : 0}%`;
+console.log(`prompt tokens read from cache: agent ${cachedShare(spend.agent)}, simulator ${cachedShare(spend.simulator)}`);
 if (failedRuns.length > 0) console.log(`${failedRuns.length} runs failed to complete and are not counted: ${failedRuns.join(", ")}`);

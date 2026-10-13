@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from "node:fs";
 export interface Tally {
   calls: number;
   promptTokens: number;
+  cachedTokens: number; // of promptTokens, read from the provider's prompt cache
   completionTokens: number;
   reasoningTokens: number;
   cost: number; // dollars
@@ -17,7 +18,7 @@ export interface Spend {
   agent: Tally;
   simulator: Tally;
 }
-const tally = (): Tally => ({ calls: 0, promptTokens: 0, completionTokens: 0, reasoningTokens: 0, cost: 0 });
+const tally = (): Tally => ({ calls: 0, promptTokens: 0, cachedTokens: 0, completionTokens: 0, reasoningTokens: 0, cost: 0 });
 export const newSpend = (): Spend => ({ agent: tally(), simulator: tally() });
 export function addSpend(into: Spend, from: Spend): void {
   for (const side of ["agent", "simulator"] as const) {
@@ -50,6 +51,7 @@ export interface ChatReply {
     prompt_tokens: number;
     completion_tokens: number;
     cost?: number;
+    prompt_tokens_details?: { cached_tokens?: number };
     completion_tokens_details?: { reasoning_tokens?: number };
   };
   provider?: string; // the OpenRouter provider that answered
@@ -134,6 +136,7 @@ export async function chat(
       const t = spend[options.side ?? "simulator"];
       t.calls++;
       t.promptTokens += data.usage?.prompt_tokens ?? 0;
+      t.cachedTokens += data.usage?.prompt_tokens_details?.cached_tokens ?? 0;
       t.completionTokens += data.usage?.completion_tokens ?? 0;
       t.reasoningTokens += data.usage?.completion_tokens_details?.reasoning_tokens ?? 0;
       t.cost += data.usage?.cost ?? 0;
