@@ -60,9 +60,14 @@ export async function chat(
     ...(routing.provider?.length ? { provider: { order: routing.provider, allow_fallbacks: false } } : {}),
     ...(routing.reasoning ? { reasoning: routing.reasoning } : {}),
   });
+  // Rate limits and server errors are retried: after the server's Retry-After when it sends one,
+  // otherwise with exponential backoff up to a minute. Jitter keeps parallel tasks that hit the
+  // limit together from retrying in lockstep.
   let lastError = "";
-  for (let attempt = 0; attempt < 4; attempt++) {
-    if (attempt > 0) await sleep(1000 * 2 ** attempt);
+  let retryAfterMs = 0;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    if (attempt > 0) await sleep((retryAfterMs || Math.min(60_000, 1000 * 2 ** attempt)) * (0.5 + Math.random()));
+    retryAfterMs = 0;
     let res: Response;
     try {
       res = await fetch(ENDPOINT, {
@@ -77,6 +82,8 @@ export async function chat(
     const text = await res.text();
     if (res.status === 429 || res.status >= 500) {
       lastError = `HTTP ${res.status}: ${text.slice(0, 300)}`;
+      const after = Number(res.headers.get("retry-after"));
+      if (after > 0) retryAfterMs = Math.min(120_000, after * 1000);
       continue;
     }
     if (!res.ok) throw new Error(`OpenRouter HTTP ${res.status}: ${text.slice(0, 500)}`);

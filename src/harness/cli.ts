@@ -3,6 +3,7 @@
 //          [--user-model M] [--server URL] [--out DIR]
 // --agent-provider: OpenRouter endpoints for the agent, e.g. coreweave/fp16; no fallback to others.
 // --agent-reasoning: the agent's reasoning effort (minimal, low, medium, high) or a token budget.
+// --parallel: tasks run at once (default 1). Output lines then come in finishing order.
 //          [--customer llm|scripted] [--extract-samples N] [--wrong-identity-rate R]
 // --wrong-identity-rate: share of tasks whose customer gives one identity detail wrong first (default 0.25).
 // --tasks-per-bank: draw more task variants until each bank has T tasks (default: one per template).
@@ -20,6 +21,8 @@ import { parseArgs } from "node:util";
 import { generateBank } from "../gen/generate.ts";
 import { createEnvServer } from "../env/server.ts";
 import { TEMPLATES, buildTasks } from "../gen/tasks.ts";
+import type { Task } from "../gen/tasks.ts";
+import type { Bank } from "../gen/generate.ts";
 import { DEFAULT_MODEL, readApiKey } from "./llm.ts";
 import type { ChatRouting } from "./llm.ts";
 import { agentSystemPrompt } from "./prompts.ts";
@@ -37,6 +40,7 @@ const { values } = parseArgs({
     "wrong-identity-rate": { type: "string" },
     "agent-model": { type: "string", default: DEFAULT_MODEL },
     "agent-provider": { type: "string" },
+    parallel: { type: "string", default: "1" },
     "agent-reasoning": { type: "string" },
     "user-model": { type: "string", default: DEFAULT_MODEL },
     server: { type: "string" },
@@ -95,28 +99,40 @@ const meta: Record<string, unknown> = {
   userModel: values["user-model"],
   customer: values.customer,
   extractSamples: Number(values["extract-samples"]),
+  parallel: Number(values.parallel),
 };
 writeJson(join(runDir, "meta.json"), meta);
 
+// Every task of every bank first, then up to --parallel of them at a time. Each task has its own
+// environment session, so they never share state. A task whose run fails (the API still refusing
+// after retries) is an error: left out of the totals and listed for a rerun.
+const jobs: { bank: Bank; task: Task }[] = [];
+for (let seed = Number(values.seed); seed < Number(values.seed) + Number(values.count); seed++) {
+  const { bank, errors } = generateBank(seed);
+  if (!bank) {
+    console.error(`seed ${seed}: invalid bank\n  ${errors.join("\n  ")}`);
+    continue;
+  }
+  const wanted = values["tasks-per-bank"] ? Number(values["tasks-per-bank"]) : 0;
+  const keep = (t: { template: string }) => !templateFilter || templateFilter.some((re) => re.test(t.template));
+  const options = values["wrong-identity-rate"] ? { wrongIdentityRate: Number(values["wrong-identity-rate"]) } : {};
+  let tasks = buildTasks(bank, 0, options).filter(keep);
+  for (let variant = 1; tasks.length > 0 && tasks.length < wanted; variant++) tasks.push(...buildTasks(bank, variant, options).filter(keep));
+  if (wanted > 0) tasks = tasks.slice(0, wanted);
+  const { config, docs } = bank;
+  writeJson(join(runDir, "banks", `${seed}.json`), { seed, config, docs, agentPrompt: agentSystemPrompt(config, docs) });
+  for (const task of tasks) jobs.push({ bank, task });
+}
+
+const parallel = Math.max(1, Number(values.parallel));
 let passed = 0;
 let total = 0;
+const failedRuns: string[] = [];
 try {
-  for (let seed = Number(values.seed); seed < Number(values.seed) + Number(values.count); seed++) {
-    const { bank, errors } = generateBank(seed);
-    if (!bank) {
-      console.error(`seed ${seed}: invalid bank\n  ${errors.join("\n  ")}`);
-      continue;
-    }
-    const wanted = values["tasks-per-bank"] ? Number(values["tasks-per-bank"]) : 0;
-    const keep = (t: { template: string }) => !templateFilter || templateFilter.some((re) => re.test(t.template));
-    const options = values["wrong-identity-rate"] ? { wrongIdentityRate: Number(values["wrong-identity-rate"]) } : {};
-    let tasks = buildTasks(bank, 0, options).filter(keep);
-    for (let variant = 1; tasks.length > 0 && tasks.length < wanted; variant++) tasks.push(...buildTasks(bank, variant, options).filter(keep));
-    if (wanted > 0) tasks = tasks.slice(0, wanted);
-    const { config, docs } = bank;
-    writeJson(join(runDir, "banks", `${seed}.json`), { seed, config, docs, agentPrompt: agentSystemPrompt(config, docs) });
-    for (const task of tasks) {
-      total++;
+  let next = 0;
+  const worker = async () => {
+    while (next < jobs.length) {
+      const { bank, task } = jobs[next++]!;
       try {
         const result = await runTask(bank, task, {
           baseUrl: baseUrl!,
@@ -129,6 +145,7 @@ try {
         });
         writeJson(join(runDir, `${task.id.replace(/:/g, "_")}.json`), { task, result });
         const e = result.evaluation;
+        total++;
         if (e.pass) passed++;
         const issues = [
           e.dbMatch ? "" : "end state differs",
@@ -141,12 +158,15 @@ try {
         const verdict = e.endReason === "off_script" ? "OFF-SCRIPT" : e.pass ? "PASS" : "FAIL";
         console.log(`${verdict} ${task.id} (${e.endReason}, ${e.counts.calls} calls)${issues.length ? ": " + issues.join("; ") : ""}`);
       } catch (err) {
+        failedRuns.push(task.id);
         console.error(`ERROR ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(parallel, jobs.length) }, worker));
 } finally {
   server?.close();
-  writeJson(join(runDir, "meta.json"), { ...meta, finishedAt: new Date().toISOString(), passed, total });
+  writeJson(join(runDir, "meta.json"), { ...meta, finishedAt: new Date().toISOString(), passed, total, failedRuns });
 }
 console.log(`${passed}/${total} passed; runs written to ${runDir}`);
+if (failedRuns.length > 0) console.log(`${failedRuns.length} runs failed to complete and are not counted: ${failedRuns.join(", ")}`);
