@@ -55,6 +55,8 @@ planted ones.
   be handed to a human)
 - Move money between your own accounts, within or over a monthly limit
 - Ask which account pays the most interest on an amount, and open it
+- Question last month's interest payment: a bonus that was earned but left out, the wrong balance
+  used, or a payment that was right (the bonus was not earned that month)
 
 ## Quick start
 

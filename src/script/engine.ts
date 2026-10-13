@@ -59,6 +59,8 @@ function details(goal: Goal): [string, string | number][] {
     case "refund_fee":
     case "report_transaction":
       return [["account", goal.account], ["amount", goal.amount]];
+    case "correct_interest":
+      return [["account", goal.account]];
     case "request_service":
       return [];
     case "transfer_funds":
@@ -123,6 +125,9 @@ function triggersOf(script: CustomerScript, acts: Act[]): Set<Trigger> {
         break;
       case "mentions_fee_valid":
         if (goal.action === "refund_fee" && about(goal, a) && a.args.valid === true) found.add("refused");
+        break;
+      case "mentions_interest_correct":
+        if (goal.action === "correct_interest" && about(goal, a) && a.args.correct === true) found.add("refused");
         break;
       case "ask_confirmation":
         if (a.args.action === goal.action) found.add(mismatch(goal, a) ? "confirm_mismatch" : "confirm_matches");

@@ -13,7 +13,7 @@ export interface RecordedCheck extends Check {
 }
 
 export interface Change {
-  table: "customers" | "accounts" | "transactions";
+  table: "customers" | "accounts" | "transactions" | "tickets";
   id: string;
   op: "add" | "update" | "remove";
   before?: unknown;
@@ -60,5 +60,6 @@ export function diffDatabases(before: Database, after: Database): Change[] {
     ...diffTable("customers", records(before.customers), records(after.customers)),
     ...diffTable("accounts", records(before.accounts), records(after.accounts)),
     ...diffTable("transactions", txns(before), txns(after)),
+    ...diffTable("tickets", new Map(before.tickets.map((t) => [t.id, t])), new Map(after.tickets.map((t) => [t.id, t]))),
   ];
 }

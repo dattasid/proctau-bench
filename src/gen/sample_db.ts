@@ -1,11 +1,11 @@
 // Background customers with a few months of history, simulated day by day so that
 // every monthly fee in the history is exactly what the rules say. Task fixtures
-// will add their own customers on top. Interest is not posted yet.
+// will add their own customers on top. Interest is paid the same way.
 
 import { addDays, addMonths, daysBetween, monthOf, monthStart } from "../util/dates.ts";
 import type { Rng } from "../util/rng.ts";
 import { productsOf, tierRank } from "../bank/products.ts";
-import { courtesyReversalsInYear, monthlyFeeDue, requirementMatches } from "../bank/rules.ts";
+import { courtesyReversalsInYear, interestDue, monthlyFeeDue, requirementMatches } from "../bank/rules.ts";
 import type { AccountType, BankConfig, Product } from "../bank/schema.ts";
 import type { Account, Customer, Database, Transaction, TransactionKind } from "../bank/state.ts";
 import { at, SPEC } from "./spec.ts";
@@ -83,7 +83,7 @@ export function sampleDatabase(rng: Rng, config: BankConfig, spec: Spec = SPEC):
   const yesterday = addDays(today, -1);
   const historyStart = monthStart(addMonths(monthOf(today), -BG.historyMonths));
   const reversalCap = config.policies.feeReversal.maxPerYear;
-  const db: Database = { schemaVersion: 1, customers: {}, accounts: {}, transactions: [] };
+  const db: Database = { schemaVersion: 1, customers: {}, accounts: {}, transactions: [], tickets: [] };
   const role = (a: Account) => types[config.products[a.productId]!.accountType]!.background;
 
   const holders: Holder[] = [];
@@ -125,10 +125,13 @@ export function sampleDatabase(rng: Rng, config: BankConfig, spec: Spec = SPEC):
   for (let day = historyStart; day <= yesterday; day = addDays(day, 1)) {
     const dayOfMonth = Number(day.slice(8));
 
-    // Charge last month's fees first, using the same rule the validator and executor use.
+    // Pay last month's interest and charge its fees first, using the same rules the validator and
+    // executor use.
     if (dayOfMonth === 1 && day > historyStart) {
       const month = addMonths(monthOf(day), -1);
       for (const { account } of holders.flatMap((h) => h.accounts)) {
+        const interest = interestDue(config, db, account, month);
+        if (interest > 0) post(account, day, "interest", interest, `Interest for ${month}`, { interestMonth: month });
         const fee = monthlyFeeDue(config, db, account, month);
         if (fee === 0) continue;
         const charge = post(account, day, "monthly_fee", -fee, `Monthly fee for ${month}`, { feeMonth: month });

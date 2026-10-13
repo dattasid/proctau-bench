@@ -6,7 +6,7 @@
 import type { Bank } from "./generate.ts";
 import { addDays, addMonths, daysBetween, monthOf, monthStart } from "../util/dates.ts";
 import { callTool } from "../env/executor.ts";
-import { addAccount, addCustomer, addTransaction, chargeMonthlyFees } from "./fixtures.ts";
+import { addAccount, addCustomer, addTransaction, postMonthly } from "./fixtures.ts";
 import { longDate, money } from "../util/format.ts";
 import { hashDatabase } from "../util/hash.ts";
 import { transfer } from "../bank/ledger.ts";
@@ -20,7 +20,8 @@ import type { TraceRecord } from "../env/session.ts";
 import type { Account, Customer, Database } from "../bank/state.ts";
 import { auditDatabase, describeFinding } from "../bank/validate_db.ts";
 import type { Finding } from "../bank/validate_db.ts";
-import type { CustomerScript, FeeTruth } from "../script/types.ts";
+import type { CustomerScript, FeeTruth, InterestTruth } from "../script/types.ts";
+import { interestHistory, interestHistoryFits } from "./interest_history.ts";
 import { feeHistory } from "./witness.ts";
 import type { MonthPlan } from "./witness.ts";
 
@@ -191,7 +192,7 @@ function openingFixture(rng: Rng, bank: Bank, target: Product, tooNew: Requireme
   const held = Object.values(db.accounts).filter((a) => a.customerId === customer.id);
   // Two accounts of one product would make "your Gold Checking account" ambiguous.
   if (new Set(held.map((a) => a.productId)).size < held.length) throw new Error("fixture holds two accounts of one product");
-  for (const a of held) chargeMonthlyFees(config, db, a, today);
+  for (const a of held) postMonthly(config, db, a, today);
   const fundingProduct = config.products[funding.productId]!;
   const verify = { tool: "verify_identity", args: { customerId: customer.id, dateOfBirth: customer.dateOfBirth, ssnLast4: customer.ssnLast4 } };
   const open = {
@@ -677,7 +678,7 @@ const reportUnrecognizedTransaction: TaskTemplate = {
     const date = day(rng.int(1, 9));
     const merchant = merchants[3]!;
     addTransaction(f.db, f.account, date, "card_purchase", -amount * 100, `Card purchase: ${merchant}`);
-    chargeMonthlyFees(bank.config, f.db, f.account, f.today);
+    postMonthly(bank.config, f.db, f.account, f.today);
     assertValid(this.id, bank, f.db);
     const want = `There's a ${money(amount)} card purchase from ${merchant} on ${longDate(date)} on your ${f.product.displayName} account that you didn't make.`;
     return handoverTask(
@@ -700,7 +701,7 @@ const requestOutOfScope: TaskTemplate = {
   applies: (config) => productsOf(config, config.accountTypes[0]!).some((p) => p.requirements.length === 0),
   build(rng, bank) {
     const f = handoverFixture(rng, bank);
-    chargeMonthlyFees(bank.config, f.db, f.account, f.today);
+    postMonthly(bank.config, f.db, f.account, f.today);
     assertValid(this.id, bank, f.db);
     const request = rng.pick(OUT_OF_SCOPE_REQUESTS);
     return handoverTask(
@@ -744,8 +745,8 @@ function transferFixture(rng: Rng, bank: Bank, from: Product, used: number) {
     const date = addDays(monthStart(monthOf(today)), rng.int(0, dayOfMonth - 2));
     transfer(db, source, dest, date, rng.money(50, 500, 50) * 100);
   }
-  chargeMonthlyFees(config, db, source, today);
-  chargeMonthlyFees(config, db, dest, today);
+  postMonthly(config, db, source, today);
+  postMonthly(config, db, dest, today);
   const limit = transferLimited(config, source) ? config.policies.transferLimit!.perMonth : null;
   const goal = { action: "transfer_funds", from: from.displayName, to: toProduct.displayName, amount } as const;
   const want =
@@ -891,7 +892,7 @@ const openBestInterest: TaskTemplate = {
       // A long-held first-type account to fund from; it also meets many requirements, not all.
       const fundingProduct = productsOf(config, config.accountTypes[0]!).find((p) => p.requirements.length === 0)!;
       const funding = addAccount(db, customer, fundingProduct.id, addDays(today, -rng.int(15, 700)), (amount + rng.money(1000, 5000, 100)) * 100);
-      chargeMonthlyFees(config, db, funding, today);
+      postMonthly(config, db, funding, today);
       const candidates = productsOf(config, accountType).map((p) => {
         const why = !meetsRequirements(config, db, customer.id, p, today)
           ? "requirement not met"
@@ -964,6 +965,169 @@ const openBestInterest: TaskTemplate = {
   },
 };
 
+// ---- Interest payments
+
+// Products an interest task can use; with `bonus`, only those offering a bonus.
+const interestProducts = (config: BankConfig, bonus: boolean) =>
+  allProducts(config).filter((p) => interestHistoryFits(config, p) && (!bonus || p.bonuses.length > 0));
+
+type InterestCase = "bonus_missed" | "bonus_not_earned" | "wrong_method";
+
+// A customer who thinks last month's interest payment was too low. bonus_missed: the bonus was earned
+// but left out; wrong_method: money left late in the month and the payment used the month-end balance
+// instead of the bank's method; bonus_not_earned: the payment was right, and the bonus the customer
+// may expect was not earned that month, though it looks earned from today's view.
+function interestFixture(rng: Rng, bank: Bank, product: Product, kind: InterestCase) {
+  const { config } = bank;
+  const today = config.bank.simulatedDate;
+  const db = structuredClone(bank.db);
+  const customer = newCustomer(rng, db, today);
+  const month = feeMonth(today);
+  const plant = kind === "bonus_missed" ? "no_bonus" : kind === "wrong_method" ? "month_end" : "none";
+  const h = interestHistory(rng, config, db, customer, product, month, kind !== "bonus_not_earned", plant);
+  // A dollar or more at stake, so a wrong answer is a real one.
+  const short = h.dueCents - h.payment.amountCents;
+  if (plant !== "none" && short < 100) throw new Infeasible(`interest fixture: payment only ${short} cents short`);
+  if (kind === "bonus_not_earned" && h.withBonusCents - h.dueCents < 100) throw new Infeasible("interest fixture: bonus worth under a dollar");
+  const amount = h.payment.amountCents / 100;
+  const goal = { action: "correct_interest", account: product.displayName, amount, date: h.payment.date } as const;
+  const truth: InterestTruth = {
+    kind: "interest",
+    month,
+    method: config.policies.interestMethod,
+    paid: amount,
+    due: h.dueCents / 100,
+    bonus: h.bonus ? { trigger: h.bonus.trigger, earned: h.bonusEarned, with_bonus: h.withBonusCents / 100 } : null,
+    planted: plant,
+  };
+  const want =
+    `You are ${customer.name}. You were paid ${money(amount)} in interest on ${longDate(h.payment.date)} on your ` +
+    `${product.displayName} account, and it looks too low to you. You want it checked and corrected. ` +
+    `${identityLine(customer)} You do not know any account numbers or transaction ids.`;
+  const ticket = (expectedCents: number) => ({
+    tool: "open_ticket",
+    args: {
+      accountId: h.account.id,
+      kind: "interest_discrepancy",
+      month,
+      expectedInterest: expectedCents / 100,
+      summary: `Interest for ${month} paid ${money(amount)}, should be ${money(expectedCents / 100)}.`,
+    },
+  });
+  return {
+    db,
+    customer,
+    planted: h.planted,
+    goal,
+    truth,
+    want,
+    withBonusCents: h.withBonusCents,
+    dueCents: h.dueCents,
+    knows: {
+      full_name: customer.name,
+      date_of_birth: customer.dateOfBirth,
+      ssn_last4: customer.ssnLast4,
+      account: product.displayName,
+      amount,
+      date: h.payment.date,
+    },
+    find: { tool: "find_customer", args: { name: customer.name } },
+    verify: { tool: "verify_identity", args: { customerId: customer.id, dateOfBirth: customer.dateOfBirth, ssnLast4: customer.ssnLast4 } },
+    ticket,
+  };
+}
+
+const interestInstructions = (want: string) =>
+  `${want} If the agent says the interest will be corrected, thank them and end the conversation. If the agent says the ` +
+  "interest was right, ask why once, then end the conversation. Do not ask about anything else.";
+
+// An interest payment came out short, and the agent should open a ticket with the right amount.
+function shortInterestTemplate(id: string, kind: "bonus_missed" | "wrong_method"): TaskTemplate {
+  return {
+    id,
+    applies: (config) => interestProducts(config, kind === "bonus_missed").length > 0,
+    build(rng, bank) {
+      const products = shuffled(rng, interestProducts(bank.config, kind === "bonus_missed"));
+      return orNothing(() =>
+        firstThatBuilds([...products, ...products], (product) => {
+          const f = interestFixture(rng, bank, product, kind);
+          assertValid(id, bank, f.db, f.planted);
+          const goldCalls = [f.find, f.verify, f.ticket(f.dueCents)];
+          const { records, db } = replay(bank, f.db, goldCalls);
+          if (records.some((r) => r.outcome !== "executed" || r.checks.some((c) => !c.passed))) {
+            throw new Error(`${id}: gold calls did not all pass\n${JSON.stringify(records.map((r) => r.result))}`);
+          }
+          const intended = [
+            { rule: "ticket.interest_wrong", passed: true },
+            { rule: "ticket.interest_amount", passed: true },
+          ];
+          assertIntent(id, records[2]!, intended);
+          return {
+            id: `${id}:${bank.seed}`,
+            template: id,
+            bankSeed: bank.seed,
+            db: f.db,
+            user: { instructions: interestInstructions(f.want) },
+            script: { name: f.customer.name, knows: f.knows, goal: f.goal, reactions: {}, expectedEnding: "ticket_opened", truth: f.truth },
+            intended,
+            goldCalls,
+            planted: f.planted,
+            goldHash: hashDatabase(db),
+          };
+        }),
+      );
+    },
+  };
+}
+
+// Last month's interest bonus was earned, but the payment left it out. The agent should check the
+// month's facts (a direct deposit, or the linked account held at month end), work out the interest
+// with the bonus and open a ticket for the difference. Gold: find_customer, verify_identity,
+// open_ticket(interest_discrepancy, the interest due).
+const interestBonusMissed = shortInterestTemplate("interest_bonus_missed", "bonus_missed");
+
+// Money left the account late last month, and the payment used the month-end balance instead of the
+// bank's method. The agent must work it out by the bank's method, not the one that matches the
+// payment. Gold: find_customer, verify_identity, open_ticket(interest_discrepancy, the interest due).
+const interestWrongMethod = shortInterestTemplate("interest_wrong_method", "wrong_method");
+
+// Last month's payment was right: the bonus was not earned that month (no direct deposit that month,
+// or the linked account opened just after it), though it is earned in the months around it or holds
+// today. The agent should explain and open no ticket. Gold: find_customer, verify_identity, nothing
+// else; forbidden: a ticket claiming the bonus.
+const interestBonusNotEarned: TaskTemplate = {
+  id: "interest_bonus_not_earned",
+  applies: (config) => interestProducts(config, true).length > 0,
+  build(rng, bank) {
+    const products = shuffled(rng, interestProducts(bank.config, true));
+    return orNothing(() =>
+      firstThatBuilds([...products, ...products], (product) => {
+        const f = interestFixture(rng, bank, product, "bonus_not_earned");
+        assertValid(this.id, bank, f.db, f.planted);
+        const goldCalls = [f.find, f.verify];
+        const { records, db } = replay(bank, f.db, goldCalls);
+        if (records.some((r) => r.outcome !== "executed")) throw new Error(`${this.id}: gold calls failed`);
+        const wrong = f.ticket(f.withBonusCents);
+        const intended = [{ rule: "ticket.interest_wrong", passed: false }];
+        assertIntent(this.id, replay(bank, f.db, [...goldCalls, wrong]).records[2]!, intended);
+        return {
+          id: `${this.id}:${bank.seed}`,
+          template: this.id,
+          bankSeed: bank.seed,
+          db: f.db,
+          user: { instructions: interestInstructions(f.want) },
+          script: { name: f.customer.name, knows: f.knows, goal: f.goal, reactions: {}, expectedEnding: "refused", truth: f.truth },
+          intended,
+          goldCalls,
+          forbiddenCalls: [wrong],
+          planted: f.planted,
+          goldHash: hashDatabase(db),
+        };
+      }),
+    );
+  },
+};
+
 export const TEMPLATES: TaskTemplate[] = [
   openAccountEligible,
   openAccountTooNew,
@@ -975,6 +1139,9 @@ export const TEMPLATES: TaskTemplate[] = [
   transferBetweenAccounts,
   transferOverLimit,
   openBestInterest,
+  interestBonusMissed,
+  interestWrongMethod,
+  interestBonusNotEarned,
 ];
 
 // ---- Modifiers: changes any task can carry on top of its template.

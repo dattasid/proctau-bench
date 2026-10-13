@@ -41,7 +41,14 @@ export interface TransferGoal {
   amount: number;
 }
 
-export type Goal = OpenGoal | RefundGoal | ReportGoal | ServiceGoal | TransferGoal;
+export interface InterestGoal {
+  action: "correct_interest"; // a month's interest payment the customer thinks was too low
+  account: string;
+  amount: number; // the interest paid, dollars
+  date: string; // the day it was paid
+}
+
+export type Goal = OpenGoal | RefundGoal | ReportGoal | ServiceGoal | TransferGoal | InterestGoal;
 
 // Situations the engine recognizes in an agent turn, from the extracted acts.
 export const TRIGGERS = [
@@ -102,10 +109,20 @@ export interface CustomerScript {
   // This task's own reactions; the shared table (engine.ts) covers every other trigger. The nth time
   // a trigger fires, the nth reply is used; the last one repeats.
   reactions: Partial<Record<Trigger, Reply[]>>;
-  expectedEnding: "account_opened" | "refused_with_date" | "fee_refunded" | "transferred" | "funds_moved" | "refused";
+  expectedEnding: "account_opened" | "refused_with_date" | "fee_refunded" | "transferred" | "funds_moved" | "refused" | "ticket_opened";
   // What is actually true, for checking what the agent mentions. Written by the template, which built
   // the situation and so knows it.
-  truth: OpeningTruth | FeeTruth | HandoverTruth | TransferTruth | BestTruth;
+  truth: OpeningTruth | FeeTruth | HandoverTruth | TransferTruth | BestTruth | InterestTruth;
+}
+
+export interface InterestTruth {
+  kind: "interest";
+  month: string; // the month the interest was paid for
+  method: string; // the bank's method
+  paid: number; // dollars
+  due: number; // dollars, by the bank's method and bonus rules
+  bonus: { trigger: string; earned: boolean; with_bonus: number } | null; // with_bonus: the month's interest if the bonus applied
+  planted: "none" | "no_bonus" | "month_end"; // why the payment is wrong, if it is
 }
 
 export interface OpeningTruth {

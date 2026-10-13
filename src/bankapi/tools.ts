@@ -4,10 +4,20 @@
 
 import { postTransaction, transfer } from "../bank/ledger.ts";
 import { productIds, requiredAccountName } from "../bank/products.ts";
-import { courtesyReversalsInYear, evaluateWaiver, requirementMet, transferLimited, transfersOutInMonth } from "../bank/rules.ts";
-import type { BankConfig } from "../bank/schema.ts";
+import {
+  courtesyReversalsInYear,
+  evaluateWaiver,
+  interestDue,
+  interestForMonth,
+  requirementMet,
+  transferLimited,
+  transfersOutInMonth,
+} from "../bank/rules.ts";
+import { INTEREST_METHODS } from "../bank/schema.ts";
+import type { BankConfig, InterestMethod } from "../bank/schema.ts";
 import { nextId } from "../bank/state.ts";
-import type { Account, Transaction } from "../bank/state.ts";
+import type { Account, Ticket, Transaction } from "../bank/state.ts";
+import { addMonths, monthOf, monthStart } from "../util/dates.ts";
 import type { BankSession } from "./session.ts";
 
 export interface Check {
@@ -20,14 +30,14 @@ export interface Check {
 }
 
 export interface Param {
-  type: "string" | "number";
+  type: "string" | "number" | "boolean";
   description: string;
   enum?: readonly string[] | ((config: BankConfig) => readonly string[]); // a function: per bank
   optional?: boolean;
   money?: boolean; // positive, at most two decimals
 }
 
-export type Args = Record<string, string | number | undefined>;
+export type Args = Record<string, string | number | boolean | undefined>;
 
 export interface Plan {
   checks: Check[];
@@ -86,6 +96,7 @@ function describeTransaction(t: Transaction) {
     amount: dollars(t.amountCents),
     memo: t.memo,
     ...(t.feeMonth ? { feeMonth: t.feeMonth } : {}),
+    ...(t.interestMonth ? { interestMonth: t.interestMonth } : {}),
     ...(t.relatedId ? { relatedTransactionId: t.relatedId } : {}),
   };
 }
@@ -310,6 +321,100 @@ export const TOOLS: Tool[] = [
           const memo = reason === "correction" ? "Monthly fee charged in error" : "Courtesy reversal of monthly fee";
           const t = postTransaction(s.db, account, s.now, kind, -fee.amountCents, memo, { relatedId: fee.id });
           return { refund: describeTransaction(t), account: describeAccount(s, account) };
+        },
+      };
+    },
+  },
+  {
+    name: "calculate_interest",
+    description:
+      "Work out one month's interest on an account by a given method, with or without the account's interest bonus. " +
+      "Returns the interest and the balance the method used. It does not check which method or bonus applies.",
+    params: {
+      accountId: { type: "string", description: "Account id" },
+      month: { type: "string", description: "The month, YYYY-MM; it must be over" },
+      method: { type: "string", description: "How the interest is worked out", enum: INTEREST_METHODS },
+      includeBonus: { type: "boolean", description: "Add the product's interest bonus to every rate" },
+    },
+    write: false,
+    plan: (s, args) => {
+      const account = s.db.accounts[str(args, "accountId")];
+      if (!account) return nothing([system("account.exists", false, `No account with id ${str(args, "accountId")}.`)]);
+      const month = str(args, "month");
+      const valid = /^\d{4}-\d{2}$/.test(month) && monthStart(addMonths(month, 1)) <= s.now && month >= monthOf(account.openedOn);
+      const checks = [
+        system("account.exists", true, "account found"),
+        system("interest.month", valid, valid ? `${month} is over` : `Month must be YYYY-MM, after the account opened and already over.`),
+        identity(s, account.customerId, false),
+      ];
+      if (!valid) return nothing(checks);
+      return {
+        checks,
+        apply: () => {
+          const product = s.config.products[account.productId]!;
+          const bonus = args.includeBonus === true ? product.bonuses.reduce((sum, b) => sum + b.apyBoost, 0) : 0;
+          const method = str(args, "method") as InterestMethod;
+          const r = interestForMonth(s.config, s.db, account, month, method, bonus);
+          return {
+            accountId: account.id,
+            month,
+            method,
+            bonusIncluded: args.includeBonus === true && product.bonuses.length > 0,
+            ...(r.balanceCents !== null ? { balanceUsed: dollars(r.balanceCents) } : {}),
+            interest: dollars(r.cents),
+          };
+        },
+      };
+    },
+  },
+  {
+    name: "open_ticket",
+    description:
+      "Open a ticket for a back-office team. kind 'interest_discrepancy': a month's interest was paid wrongly; give the " +
+      "month and the interest that should have been paid. kind 'closure_approval': an account closure that needs a " +
+      "manager's approval.",
+    params: {
+      accountId: { type: "string", description: "The account the ticket is about" },
+      kind: { type: "string", description: "What the ticket is for", enum: ["interest_discrepancy", "closure_approval"] },
+      month: { type: "string", description: "interest_discrepancy only: the month, YYYY-MM", optional: true },
+      expectedInterest: { type: "number", description: "interest_discrepancy only: the interest that should have been paid, in dollars", optional: true, money: true },
+      summary: { type: "string", description: "A short note for the team" },
+    },
+    write: true,
+    plan: (s, args) => {
+      const account = s.db.accounts[str(args, "accountId")];
+      if (!account) return nothing([system("account.exists", false, `No account with id ${str(args, "accountId")}.`)]);
+      const kind = str(args, "kind") as Ticket["kind"];
+      const month = args.month as string | undefined;
+      const expected = args.expectedInterest as number | undefined;
+      const checks: Check[] = [system("account.exists", true, "account found")];
+      if (kind === "interest_discrepancy") {
+        const complete = month !== undefined && expected !== undefined && /^\d{4}-\d{2}$/.test(month) && monthStart(addMonths(month, 1)) <= s.now;
+        checks.push(system("ticket.fields", complete, complete ? "month and expected interest given" : "An interest ticket needs a month that is over and the expected interest."));
+        if (!complete) return nothing(checks);
+      }
+      checks.push(identity(s, account.customerId, true));
+      if (kind === "interest_discrepancy") {
+        const due = interestDue(s.config, s.db, account, month!);
+        const paid = s.db.transactions.filter((t) => t.accountId === account.id && t.kind === "interest" && t.interestMonth === month).reduce((sum, t) => sum + t.amountCents, 0);
+        checks.push(
+          policy("ticket.interest_wrong", due !== paid, `${month}: paid ${dollars(paid)}, due ${dollars(due)}`),
+          policy("ticket.interest_amount", cents(expected!) === due, `expected ${expected}, due ${dollars(due)}`),
+        );
+      }
+      return {
+        checks,
+        apply: () => {
+          const ticket: Ticket = {
+            id: nextId("tkt", s.db.tickets.map((t) => t.id), 3),
+            accountId: account.id,
+            openedOn: s.now,
+            kind,
+            ...(kind === "interest_discrepancy" ? { month: month!, expectedCents: cents(expected!) } : {}),
+          };
+          s.db.tickets.push(ticket);
+          s.notes.push(`Ticket ${ticket.id}: ${str(args, "summary")}`);
+          return { ticket: { ticketId: ticket.id, kind, accountId: account.id, status: "open" } };
         },
       };
     },

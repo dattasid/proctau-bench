@@ -40,6 +40,24 @@ export type Interest =
       tiers: { minBalance: number; apy: number }[];
     };
 
+// How a month's interest is worked out from the account's end-of-day balances. Banks name one in
+// their documents; calculate_interest accepts them all, so the agent must pick the bank's.
+//   average_daily_balance: the month's average balance, at a twelfth of the yearly rate
+//   daily_accrual: each day's balance at 1/365 of the yearly rate, added up
+//   minimum_daily_balance: the month's lowest balance, at a twelfth of the yearly rate
+//   month_end_balance: the balance on the month's last day, at a twelfth of the yearly rate
+//   month_start_balance: the balance at the end of the previous month, at a twelfth of the yearly rate
+export const INTEREST_METHODS = [
+  "average_daily_balance",
+  "daily_accrual",
+  "minimum_daily_balance",
+  "month_end_balance",
+  "month_start_balance",
+] as const;
+export type InterestMethod = (typeof INTEREST_METHODS)[number];
+
+// A bonus is earned month by month. direct_deposit: a direct deposit into any of the customer's
+// accounts during the month. linked_account: an open account of that type at the end of the month.
 export type InterestBonus =
   | { trigger: "direct_deposit"; apyBoost: number }
   | { trigger: "linked_account"; accountType: AccountType; apyBoost: number }; // holds an open account of this type
@@ -74,6 +92,8 @@ export interface Policies {
   // Transfers out of accounts of these types are limited per calendar month (transfers in are not).
   // null: no limit on any account.
   transferLimit: { perMonth: number; accountTypes: AccountType[] } | null;
+  // How monthly interest is worked out. Every bank uses average_daily_balance for now.
+  interestMethod: InterestMethod;
 }
 
 export interface BankConfig {

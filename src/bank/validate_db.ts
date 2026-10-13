@@ -10,12 +10,21 @@
 // them; whoever builds a database decides which ones it meant (see gen/tasks.ts).
 
 import { addMonths, ageOn, monthOf, monthStart } from "../util/dates.ts";
-import { courtesyReversalsInYear, endOfDayBalances, meetsRequirements, monthlyFeeDue, transferLimited, transfersOutInMonth } from "./rules.ts";
+import {
+  courtesyReversalsInYear,
+  endOfDayBalances,
+  interestDue,
+  meetsRequirements,
+  monthlyFeeDue,
+  transferLimited,
+  transfersOutInMonth,
+} from "./rules.ts";
 import type { BankConfig } from "./schema.ts";
 import type { Database } from "./state.ts";
 
 export type Finding =
   | { kind: "wrong_fee"; account: string; month: string; dueCents: number; chargedCents: number }
+  | { kind: "wrong_interest"; account: string; month: string; dueCents: number; paidCents: number }
   | { kind: "opened_while_ineligible"; account: string; productId: string }
   | { kind: "over_courtesy_cap"; customer: string; year: string; count: number; cap: number }
   | { kind: "negative_balance"; account: string }
@@ -26,6 +35,8 @@ export function describeFinding(f: Finding): string {
   switch (f.kind) {
     case "wrong_fee":
       return `${f.account}: ${f.month} fee should be ${f.dueCents} cents, charged ${f.chargedCents}`;
+    case "wrong_interest":
+      return `${f.account}: ${f.month} interest should be ${f.dueCents} cents, paid ${f.paidCents}`;
     case "opened_while_ineligible":
       return `${f.account}: ${f.productId} opened by a customer who did not meet its requirements`;
     case "over_courtesy_cap":
@@ -87,12 +98,16 @@ export function auditDatabase(config: BankConfig, db: Database): Audit {
     const first = txns.reduce((m, t) => (t.date < m ? t.date : m), txns[0]!.date);
     if (Math.min(...endOfDayBalances(db, id, first, today)) < 0) findings.push({ kind: "negative_balance", account: id });
 
-    // Every month fully covered by the history should be charged exactly what the rules say.
+    // Every month covered by the history, from the account's opening or the first full month, should
+    // be charged and paid exactly what the rules say.
     for (let month = monthOf(first); monthStart(addMonths(month, 1)) < today; month = addMonths(month, 1)) {
-      if (monthStart(month) < first) continue;
+      if (monthStart(month) < first && first !== a.openedOn) continue;
       const due = monthlyFeeDue(config, db, a, month);
       const charged = -txns.filter((t) => t.kind === "monthly_fee" && t.feeMonth === month).reduce((s, t) => s + t.amountCents, 0);
       if (due !== charged) findings.push({ kind: "wrong_fee", account: id, month, dueCents: due, chargedCents: charged });
+      const owed = interestDue(config, db, a, month);
+      const paid = txns.filter((t) => t.kind === "interest" && t.interestMonth === month).reduce((s, t) => s + t.amountCents, 0);
+      if (owed !== paid) findings.push({ kind: "wrong_interest", account: id, month, dueCents: owed, paidCents: paid });
     }
 
     if (transferLimited(config, a)) {
@@ -106,6 +121,13 @@ export function auditDatabase(config: BankConfig, db: Database): Audit {
     if (!meetsRequirements(config, db, a.customerId, product, a.openedOn)) {
       findings.push({ kind: "opened_while_ineligible", account: id, productId: a.productId });
     }
+  }
+
+  const ticketIds = new Set(db.tickets.map((t) => t.id));
+  if (ticketIds.size !== db.tickets.length) err("duplicate ticket ids");
+  for (const t of db.tickets) {
+    if (!db.accounts[t.accountId]) err(`${t.id}: unknown account ${t.accountId}`);
+    if (t.openedOn > today) err(`${t.id}: opened after the simulated date`);
   }
 
   const cap = config.policies.feeReversal.maxPerYear;

@@ -177,6 +177,7 @@ function samplePolicies(rng: Rng, spec: Spec, accountTypes: string[]): Policies 
       limited.length > 0 && rng.bool(spec.policies.transferLimitChance)
         ? { perMonth: rng.int(...spec.policies.transfersOutPerMonth), accountTypes: limited }
         : null,
+    interestMethod: spec.policies.interestMethod,
   };
 }
 

@@ -30,7 +30,8 @@ export type TransactionKind =
   | "transfer_out"
   | "monthly_fee"
   | "fee_correction" // refund of a fee charged although the waiver was met; never capped
-  | "fee_reversal"; // courtesy refund of a valid fee; counts toward the yearly cap
+  | "fee_reversal" // courtesy refund of a valid fee; counts toward the yearly cap
+  | "interest"; // a month's interest, paid on the first day of the next month
 
 export interface Transaction {
   id: string;
@@ -40,7 +41,19 @@ export interface Transaction {
   amountCents: number; // signed: credits positive, debits negative
   memo: string;
   feeMonth?: string; // monthly_fee: the YYYY-MM month charged for
+  interestMonth?: string; // interest: the YYYY-MM month paid for
   relatedId?: string; // refunds: the fee refunded; transfers: the other leg
+}
+
+// A request passed to a back-office team. Only structured fields, so a correct conversation always
+// leaves the same database; the agent's free-text summary goes to the session notes.
+export interface Ticket {
+  id: string;
+  accountId: string;
+  openedOn: string;
+  kind: "interest_discrepancy" | "closure_approval";
+  month?: string; // interest_discrepancy: the YYYY-MM month whose interest was wrong
+  expectedCents?: number; // interest_discrepancy: the interest that should have been paid
 }
 
 // Next sequential id such as txn_0042: one past the highest numeric suffix in use.
@@ -58,4 +71,5 @@ export interface Database {
   customers: Record<string, Customer>;
   accounts: Record<string, Account>;
   transactions: Transaction[];
+  tickets: Ticket[];
 }

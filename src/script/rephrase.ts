@@ -49,6 +49,11 @@ function goalSentence(goal: Goal): string {
       return `I'd like to ${goal.request}.`;
     case "transfer_funds":
       return `I'd like to move ${money(goal.amount)} from my ${goal.from} account to my ${goal.to} account.`;
+    case "correct_interest":
+      return (
+        `I was paid ${money(goal.amount)} in interest on ${longDate(goal.date)} on my ${goal.account} account. That looks ` +
+        "too low to me, and I'd like it checked and corrected."
+      );
   }
 }
 
@@ -64,6 +69,8 @@ function goalValues(goal: Goal): string[] {
       return [];
     case "transfer_funds":
       return [goal.from, goal.to, money(goal.amount)];
+    case "correct_interest":
+      return [goal.account, money(goal.amount), longDate(goal.date)];
   }
 }
 
@@ -74,7 +81,7 @@ function sentence(a: CustomerAct): string {
     case "give_info":
       if (a.field === "funding_account" || a.field === "account") return `It's my ${a.value} account.`;
       if (a.field === "product") return `I'd like to open ${a.value}.`;
-      if (a.field === "date") return `It was charged on ${spoken(a.field, a.value)}.`;
+      if (a.field === "date") return `It was on ${spoken(a.field, a.value)}.`;
       if (a.field === "ssn_last4") return `The last four digits of my Social Security number are ${a.value}.`;
       return `My ${FIELD_NAMES[a.field]} is ${spoken(a.field, a.value)}.`;
     case "dont_have":

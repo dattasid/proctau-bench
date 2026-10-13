@@ -6,7 +6,7 @@ import { annualInterestCents } from "../bank/rules.ts";
 import { days, money, moneyCents, percent, times } from "../util/format.ts";
 import type { Rng } from "../util/rng.ts";
 import { accountTypeName, allProducts, productsOf, requiredAccountName, tierRank } from "../bank/products.ts";
-import type { BankConfig, InterestBonus, Product, Requirement, WaiverCondition } from "../bank/schema.ts";
+import type { BankConfig, InterestBonus, InterestMethod, Product, Requirement, WaiverCondition } from "../bank/schema.ts";
 
 export interface Doc {
   path: string;
@@ -59,11 +59,35 @@ function feeText(p: Product, bankName: string, say: Say): string {
 }
 
 function bonusText(b: InterestBonus): string {
-  const trigger =
+  const when =
     b.trigger === "direct_deposit"
-      ? "the account holder receives a direct deposit into any of their accounts with us"
-      : `the account holder also has an open ${accountTypeName(b.accountType)} account with us`;
-  return `An extra ${percent(b.apyBoost)} APY is added to every rate for any month in which ${trigger}.`;
+      ? "in which the account holder receives a direct deposit into any of their accounts with us"
+      : `at the end of which the account holder also has an open ${accountTypeName(b.accountType)} account with us`;
+  return `An extra ${percent(b.apyBoost)} APY is added to every rate for any month ${when}.`;
+}
+
+// How the bank works out a month's interest, in the documents' words.
+function methodText(method: InterestMethod): string {
+  const twelfth = "The yearly rate for that balance, divided by 12, is applied to it; with balance tiers, that balance decides the tiers.";
+  switch (method) {
+    case "average_daily_balance":
+      return (
+        "Each month's interest is worked out on the account's average balance for the month: the end-of-day balances " +
+        "for every day of the month, added up and divided by the number of days in the month. Days before the account " +
+        `was opened count as a zero balance. ${twelfth}`
+      );
+    case "daily_accrual":
+      return (
+        "Interest is worked out day by day: each day's end-of-day balance earns 1/365 of the yearly rate for that balance, " +
+        "and the month's interest is the sum over every day of the month. Days before the account was opened earn nothing."
+      );
+    case "minimum_daily_balance":
+      return `Each month's interest is worked out on the lowest end-of-day balance of the month. ${twelfth}`;
+    case "month_end_balance":
+      return `Each month's interest is worked out on the end-of-day balance on the last day of the month. ${twelfth}`;
+    case "month_start_balance":
+      return `Each month's interest is worked out on the balance at the end of the previous month. ${twelfth}`;
+  }
 }
 
 function interestText(p: Product, say: Say): string {
@@ -178,7 +202,18 @@ function interestDoc(config: BankConfig, say: Say): Doc {
       `# Interest rates\n\n` +
       say("Rates are quoted as APY, the interest earned over a year.", "All rates are annual percentage yields (APY).") +
       " To estimate a year's interest, assume the balance stays the same all year and apply the rates as described " +
-      `for each account.\n\n${sections.join("\n\n")}\n`,
+      `for each account.\n\n## How interest is paid\n\nWe use the ${config.policies.interestMethod.replaceAll("_", " ")} method. ` +
+      `${methodText(config.policies.interestMethod)} The result is ` +
+      "rounded to the nearest cent. A month's interest is paid on the first day of the next month and shows in the " +
+      "account's transactions as interest for that month. A bonus counts for a month only if its condition held in " +
+      "that month, as described for each account.\n\n" +
+      "## When a customer questions their interest\n\n" +
+      "Find the interest paid for that month in the account's transactions. Then work out what was due with the " +
+      "calculate_interest tool: use the method described above, and include the bonus only if the customer earned it " +
+      "that month. If the amount paid differs from what was due, open an interest_discrepancy ticket with the month and " +
+      "the interest that should have been paid, and tell the customer the interest team will pay the difference within " +
+      "5 business days. If the amount paid was right, explain why. Never move or refund money to make up interest " +
+      `yourself.\n\n${sections.join("\n\n")}\n`,
   };
 }
 

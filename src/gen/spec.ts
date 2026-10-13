@@ -2,7 +2,7 @@
 // sample.ts and sample_db.ts only read this. Ranges are [min, max, step]; a `...Chance` is
 // the probability of the named case. Money is in dollars, rates in percent.
 
-import type { AccountType, WaiverCondition } from "../bank/schema.ts";
+import type { AccountType, InterestMethod, WaiverCondition } from "../bank/schema.ts";
 
 export type Range = readonly [min: number, max: number, step: number];
 
@@ -219,6 +219,8 @@ export const SPEC = {
     courtesyReversalsPerYear: [0, 3, 1],
     transferLimitChance: 0.6,
     transfersOutPerMonth: [2, 6, 1],
+    // One method for now; the others are accepted by calculate_interest and can be sampled later.
+    interestMethod: "average_daily_balance" as InterestMethod,
   },
 
   background: {

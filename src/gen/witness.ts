@@ -7,11 +7,11 @@ import { addDays, addMonths, monthEnd, monthOf, monthStart } from "../util/dates
 import type { Rng } from "../util/rng.ts";
 import { postTransaction } from "../bank/ledger.ts";
 import { productsOf } from "../bank/products.ts";
-import { evaluateWaiver, monthlyFeeDue } from "../bank/rules.ts";
+import { evaluateWaiver, interestDue, monthlyFeeDue } from "../bank/rules.ts";
 import type { BankConfig, Product, WaiverCondition } from "../bank/schema.ts";
 import type { Account, Customer, Database, Transaction } from "../bank/state.ts";
 import type { Finding } from "../bank/validate_db.ts";
-import { addAccount, chargeMonthlyFees } from "./fixtures.ts";
+import { addAccount, payInterest, postMonthly } from "./fixtures.ts";
 
 export interface MonthPlan {
   month: string; // YYYY-MM, oldest first, consecutive
@@ -159,6 +159,7 @@ export function feeHistory(
   const fees: Record<string, Transaction> = {};
   const planted: Finding[] = [];
   for (let month = monthOf(account.openedOn); monthStart(addMonths(month, 1)) < today; month = addMonths(month, 1)) {
+    payInterest(db, account, month, interestDue(config, db, account, month));
     const plan = plans.find((p) => p.month === month);
     const due = monthlyFeeDue(config, db, account, month);
     const charge = plan?.chargeAnyway ? product.monthlyFee.amount * 100 : due;
@@ -175,7 +176,7 @@ export function feeHistory(
   }
 
   // The linked account's own fees last: its waiver may count the account above.
-  if (second) chargeMonthlyFees(config, db, second, today);
+  if (second) postMonthly(config, db, second, today);
 
   // The rules have the last word.
   for (const plan of plans) {

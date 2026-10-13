@@ -50,7 +50,7 @@ describe("tool list", () => {
     const productEnum = (tools.find((t) => t.name === "open_account")!.parameters.properties.productId as { enum?: string[] }).enum;
     assert.deepEqual(productEnum, productIds(config));
     assert.ok(productEnum!.includes("checking_basic") && productEnum!.includes("savings_premium"));
-    assert.equal(tools.length, 9);
+    assert.equal(tools.length, 11);
     const open = tools.find((t) => t.name === "open_account")!;
     assert.deepEqual(open.parameters.required, ["customerId", "productId", "initialDeposit", "fundingAccountId"]);
   });

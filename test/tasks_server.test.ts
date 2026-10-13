@@ -32,7 +32,7 @@ describe("REST server", () => {
   it("lists tools", async () => {
     const { bank } = generateBank(1);
     const env = await EnvClient.create(baseUrl, bank!.config, bank!.db);
-    assert.equal((await env.tools()).length, 9);
+    assert.equal((await env.tools()).length, 11);
     await env.close();
   });
 

@@ -30,7 +30,7 @@ export interface ActSpec {
   aliasOf?: string;
 }
 
-export const ACTIONS = ["open_account", "transfer_funds", "refund_fee", "close_account", "dispute_transaction", "other"] as const;
+export const ACTIONS = ["open_account", "transfer_funds", "refund_fee", "correct_interest", "close_account", "dispute_transaction", "other"] as const;
 
 export const INFO_FIELDS = [
   "full_name", "date_of_birth", "ssn_last4", "product", "amount", "funding_account", "account", "date", "reason", "other",
@@ -99,7 +99,8 @@ export const ACTS: readonly ActSpec[] = [
     description:
       "The agent reports what happened to an action the customer asked for: done, not done (declined or not " +
       "attempted), or failed. Opening an account funded from another account is one open_account action, and " +
-      "\"I haven't opened anything or moved any money\" is that same open_account, not done. Fill every detail the " +
+      "\"I haven't opened anything or moved any money\" is that same open_account, not done. Having a wrong interest " +
+      "payment corrected, including by opening a ticket for another team to pay it, is correct_interest. Fill every detail the " +
       "agent states; for a new account, the balance it was opened with is its amount.",
     args: {
       action: { type: "string", enum: ACTIONS, description: "The action." },
@@ -206,6 +207,18 @@ export const ACTS: readonly ActSpec[] = [
     args: {
       account,
       valid: { type: "boolean", description: "True if the agent says the fee was charged correctly." },
+    },
+    key: ["account"],
+    decides: true,
+  },
+  {
+    name: "mentions_interest_correct",
+    description:
+      "The agent says whether a month's interest payment was right (correct) or too low or otherwise wrong.",
+    args: {
+      account,
+      correct: { type: "boolean", description: "True if the agent says the interest paid was right." },
+      amount: { type: "number", optional: true, description: "Dollars: the interest the agent says was due, if stated." },
     },
     key: ["account"],
     decides: true,
