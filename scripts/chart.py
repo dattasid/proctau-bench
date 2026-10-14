@@ -36,31 +36,39 @@ def rate(runs: list[dict], pattern: str | None) -> tuple[int, int]:
     return sum(r["result"]["evaluation"]["pass"] for r in picked), len(picked)
 
 
+# Categorical slots in fixed order: model k always gets color k.
+COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
+
+
 def main() -> None:
     out, *specs = sys.argv[1:]
     models = [(label, load(d)) for label, d in (s.split("=", 1) for s in specs)]
     rows = [("All tasks", None), *FAMILIES]
 
-    fig, ax = plt.subplots(figsize=(8, 0.55 * len(rows) * max(2, len(models)) / 2 + 1.2))
-    height = 0.8 / len(models)
+    fig, ax = plt.subplots(figsize=(1.5 + 0.32 * len(rows) * len(models), 5))
+    width = 0.84 / len(models)
     for k, (label, runs) in enumerate(models):
         stats = [rate(runs, p) for _, p in rows]
-        ys = [i + k * height for i in range(len(rows))]
+        xs = [i + (k - (len(models) - 1) / 2) * width for i in range(len(rows))]
         values = [100 * p / n if n else 0 for p, n in stats]
-        ax.barh(ys, values, height=height * 0.9, label=label)
-        for y, v, (p, n) in zip(ys, values, stats):
-            ax.text(v + 1, y, f"{v:.0f}% ({p}/{n})", va="center", fontsize=8)
+        total_p, total_n = stats[0]
+        ax.bar(xs, values, width=width, color=COLORS[k % len(COLORS)], edgecolor="white", linewidth=1,
+               label=f"{label} ({total_p}/{total_n})")
+        for x, v in zip(xs, values):
+            ax.text(x, v + 1.5, f"{v:.0f}", ha="center", va="bottom", fontsize=6.5, color="#3d3d3a")
         print(f"{label}: " + ", ".join(f"{name} {p}/{n}" for (name, _), (p, n) in zip(rows, stats)))
 
-    ax.set_yticks([i + height * (len(models) - 1) / 2 for i in range(len(rows))])
-    ax.set_yticklabels([name for name, _ in rows])
-    ax.invert_yaxis()
-    ax.set_xlim(0, 115)
-    ax.set_xlabel("Pass rate (%)")
+    ax.set_xticks(range(len(rows)))
+    ax.set_xticklabels([name.replace(" ", "\n", 1) if len(name) > 12 else name for name, _ in rows], fontsize=9)
+    ax.set_ylim(0, 108)
+    ax.set_ylabel("Pass rate (%)")
+    ax.yaxis.grid(True, color="#e6e5e0", linewidth=0.8)
+    ax.set_axisbelow(True)
     ax.set_title("Pass rate by task family (scripted customer)")
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=min(2, len(models)), fontsize=8, frameon=False)
-    for side in ("top", "right"):
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=len(models), fontsize=8, frameon=False)
+    for side in ("top", "right", "left"):
         ax.spines[side].set_visible(False)
+    ax.tick_params(axis="y", length=0)
     fig.tight_layout()
     fig.savefig(out, dpi=150)
     print(f"wrote {out}")

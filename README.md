@@ -4,14 +4,30 @@ Procedurally generated tau-bench-style evals: randomized banks, policies and tas
 
 Work in progress.
 
+
+![Pass rate by task family for five models](images/pilot_comparison.jpg)
+
+A small pilot: every task was run on 3 random banks with the scripted customer. Runs
+where the scripted customer could not follow the agent are left out. The samples are small, so read
+these as a first look, not a ranking.
+
+Some tasks were added where the customer initially gives wrong information, which increased error rates of some models.
+
+We noticed the following failure modes in agents:
+  - gpt-6-luna: very few misses. The ones it had were fee refunds where the yearly cap on courtesy refunds had been reached, and it refunded anyway.
+  - mimo-v2.6-flash: only missed fee refunds. Three times it gave a courtesy refund without asking first, and once it refunded past the yearly cap instead of handing over to a human. Real banks don't ask for consent for fee refunds, but tau2 bench rules do, and this is made explicit in the prompt.
+  - Nemotron 3.5 Lightning: fee refunds were its weak spot, at 44%. It usually reversed the fee without asking the customer first, which breaks the consent rule.
+  - gpt-oss-120b:
+    - Its main failure was the same as Nemotron's, reversing fees without asking first.
+    - On interest checks it put the wrong amount on the support ticket.
+    - Once it opened a ticket when the interest had been paid correctly.
+  - Llama 3.3: it got the policies wrong most of the time, especially on interest checks (1 of 7) and fee refunds (2 of 9), and it sometimes sent invalid tool arguments, such as the literal word "user" as a customer id.
+
 ## What it is
 
-A benchmark for customer service agents that use tools, set in a bank. It follows the shape of
-[tau-bench](https://github.com/sierra-research/tau2-bench): an agent talks to a simulated customer,
-reads the bank's policy documents and calls the bank's API. The end state and the calls are then
-checked.
+A benchmark for customer service agents, set in a bank. It follows the shape of [tau-bench](https://github.com/sierra-research/tau2-bench): an agent talks to a simulated customer, reads the bank's policy documents and calls the bank's API. The end state and the calls are then checked.
 
-The difference is that nothing is fixed. Every bank is generated from a seed, and so are its tasks.
+The difference is that we vary the bank policies and tasks procedurally, while making them obey validation rules. This prevents agent memorization and allows us to find new modes of failure for the models.
 
 ## What is new here
 
@@ -19,6 +35,8 @@ The difference is that nothing is fixed. Every bank is generated from a seed, an
 simulated customer is often the weak link. It forgets a detail, agrees to the wrong plan, makes
 something up or ends the call early, and cheaper models do this more. Then the score partly measures
 the customer, not the agent.
+
+Fickleness of LLM user agents controlled via a system prompt has been measured by several papers. A GPT-4o user deviated from its instructions in 11 of 50 τ-bench airline conversations (AURA). τ²-bench reports critical user errors in 13% of airline conversations. Prompted traits fade in 94.3% of conversations (TraitBasis). 24.4% of successful episodes violate the user spec, and swapping only the user LLM moves mean reward by 15.2 points (UserProxyBench; Lost in Simulation reports up to 9 points).
 
 Here the customer is run by code. An extractor LLM turns each agent reply into machine-readable acts,
 such as `request_info(field="date_of_birth")` or
