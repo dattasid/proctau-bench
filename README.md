@@ -1,6 +1,6 @@
 # proctau-bench
 
-Procedurally generated tau-bench-style evals: randomized banks, policies and tasks, rule-audited gold answers, and a script-controlled customer.
+Procedurally generated tau-bench-style evals: randomized banks, policies and tasks, rule-audited gold answers, and a drift-free simulated customer.
 
 Work in progress.
 
